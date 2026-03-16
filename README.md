@@ -147,6 +147,14 @@ make build-web      # 仅构建前端
 5. 执行数据库迁移
 6. 启动服务
 
+## 仓库治理与发布规范
+
+- GitHub 分支保护（新界面 Rulesets）：[deploy/github-rulesets.md](deploy/github-rulesets.md)
+- 发布规范（分支流、门禁、打标、Hotfix）：[deploy/release-policy.md](deploy/release-policy.md)
+- 服务器发布清单：[deploy/release-checklist.md](deploy/release-checklist.md)
+- 回滚预案：[deploy/rollback-plan.md](deploy/rollback-plan.md)
+- 手动验收脚本：[deploy/manual-acceptance.md](deploy/manual-acceptance.md)
+
 ## CLI 工具
 
 ```bash

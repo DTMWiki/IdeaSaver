@@ -80,6 +80,14 @@ make build-web
 
 See: [deploy/deploy.md](./deploy/deploy.md)
 
+## Repository Governance and Release
+
+- GitHub branch protection via Rulesets: [deploy/github-rulesets.md](./deploy/github-rulesets.md)
+- Release policy (flow, gates, tagging, hotfix): [deploy/release-policy.md](./deploy/release-policy.md)
+- Server release checklist: [deploy/release-checklist.md](./deploy/release-checklist.md)
+- Rollback plan: [deploy/rollback-plan.md](./deploy/rollback-plan.md)
+- Manual acceptance script: [deploy/manual-acceptance.md](./deploy/manual-acceptance.md)
+
 ## License
 
 MIT License

@@ -1,0 +1,36 @@
+name: Branch Policy
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - canary
+      - master
+
+jobs:
+  enforce-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce PR Branch Flow
+        run: |
+          BASE="${{ github.base_ref }}"
+          HEAD="${{ github.head_ref }}"
+
+          echo "PR flow check: ${HEAD} -> ${BASE}"
+
+          if [ "$BASE" = "canary" ] && [ "$HEAD" != "dev" ]; then
+            echo "::error::Only PR from 'dev' to 'canary' is allowed."
+            exit 1
+          fi
+
+          if [ "$BASE" = "master" ] && [ "$HEAD" != "canary" ]; then
+            echo "::error::Only PR from 'canary' to 'master' is allowed."
+            exit 1
+          fi
+
+          if [ "$BASE" = "dev" ] && { [ "$HEAD" = "canary" ] || [ "$HEAD" = "master" ]; }; then
+            echo "::error::PR from 'canary/master' back to 'dev' is blocked."
+            exit 1
+          fi
+
+          echo "Branch flow policy passed."

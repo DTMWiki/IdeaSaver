@@ -123,6 +123,8 @@ bash deploy/scripts/smoke_test.sh                  # 执行冒烟脚本
 
 ## 发布与回滚文档
 
+- GitHub Rulesets 配置: [github-rulesets.md](./github-rulesets.md)
+- 发布规范: [release-policy.md](./release-policy.md)
 - 发布清单: [release-checklist.md](./release-checklist.md)
 - 回滚预案: [rollback-plan.md](./rollback-plan.md)
 - 手动验收脚本: [manual-acceptance.md](./manual-acceptance.md)
