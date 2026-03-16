@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -61,7 +62,7 @@ func TestFileServiceSubmitAppealSuccess(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO audit_logs`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(1), now))
 
-	appeal, err := svc.SubmitAppeal(t.Context(), fileID, userID, "已整改，申请复审")
+	appeal, err := svc.SubmitAppeal(context.Background(), fileID, userID, "已整改，申请复审")
 	if err != nil {
 		t.Fatalf("SubmitAppeal returned error: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestFileServiceSubmitAppealRejectsDuplicatePending(t *testing.T) {
 			"id", "file_id", "user_id", "status", "reason", "admin_comment", "reviewed_by", "reviewed_at", "created_at", "updated_at",
 		}).AddRow(uuid.New(), fileID, userID, "pending", "重复申诉", "", nil, nil, now, now))
 
-	_, err := svc.SubmitAppeal(t.Context(), fileID, userID, "再次提交")
+	_, err := svc.SubmitAppeal(context.Background(), fileID, userID, "再次提交")
 	if err == nil || !strings.Contains(err.Error(), "已有待处理申诉") {
 		t.Fatalf("expected duplicate pending error, got: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestShareServiceDeleteSharePermissionDenied(t *testing.T) {
 			"id", "user_id", "file_id", "code", "password", "expires_at", "view_count", "created_at",
 		}).AddRow(shareID, ownerID, fileID, "abcdef", "", nil, 0, now))
 
-	err := svc.DeleteShare(t.Context(), shareID, callerID)
+	err := svc.DeleteShare(context.Background(), shareID, callerID)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("expected permission denied, got: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestShareServiceAccessShareBlockedWhenFileBanned(t *testing.T) {
 		WithArgs(fileID).
 		WillReturnRows(makeFileRows(fileID, ownerID, "banned", "违规资源"))
 
-	_, err := svc.AccessShare(t.Context(), "public-code", "")
+	_, err := svc.AccessShare(context.Background(), "public-code", "")
 	if err == nil || !strings.Contains(err.Error(), "已被封禁") {
 		t.Fatalf("expected banned error, got: %v", err)
 	}
