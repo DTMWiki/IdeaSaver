@@ -1,0 +1,32 @@
+[Unit]
+Description=IdeaSaver - DTMWiki File Upload Platform
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=ideasaver
+Group=ideasaver
+WorkingDirectory=/opt/ideasaver
+ExecStart=/opt/ideasaver/ideasaver
+EnvironmentFile=/etc/ideasaver/.env
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ideasaver
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/ideasaver
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
