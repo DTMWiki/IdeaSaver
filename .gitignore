@@ -33,6 +33,8 @@ Thumbs.db
 /build/
 /bin/
 /release/
+*.tsbuildinfo
+*.7z
 
 # ===== Logs =====
 *.log
