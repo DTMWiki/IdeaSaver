@@ -12,7 +12,7 @@ export default function SSEProvider({ children }: SSEProviderProps) {
     const { refresh } = useFileStore()
     const { notification } = App.useApp()
     const eventSourceRef = useRef<EventSource | null>(null)
-    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>()
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     useEffect(() => {
         if (!token) return

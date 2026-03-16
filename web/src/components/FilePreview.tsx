@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Modal, Spin, Typography, Image } from 'antd'
+import { Modal, Spin, Typography, Image, Alert } from 'antd'
 import type { FileItem } from '@/types'
 import { getPreviewURL } from '@/api/files'
 import { isImage, isAudio, isText } from '@/utils/format'
@@ -37,6 +37,19 @@ export default function FilePreview({ file, onClose }: FilePreviewProps) {
     if (!file) return null
 
     const renderContent = () => {
+        if (file.moderation_status === 'banned') {
+            return (
+                <div style={{ padding: 20 }}>
+                    <Alert
+                        type="error"
+                        showIcon
+                        message="该文件已被管理员封禁"
+                        description={file.moderation_reason || '当前无法预览或访问此文件，可在文件列表发起申诉工单。'}
+                    />
+                </div>
+            )
+        }
+
         if (loading) {
             return <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large" /></div>
         }

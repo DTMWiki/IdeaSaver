@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/DTMWiki/IdeaSaver/server/internal/repository"
+	"github.com/DTMWiki/IdeaSaver/server/internal/storage"
 	"github.com/google/uuid"
 )
 
@@ -13,10 +17,11 @@ import (
 type AdminService struct {
 	cfg   *config.Config
 	repos *repository.Repositories
+	oss   *storage.OSSClient
 }
 
-func NewAdminService(cfg *config.Config, repos *repository.Repositories) *AdminService {
-	return &AdminService{cfg: cfg, repos: repos}
+func NewAdminService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient) *AdminService {
+	return &AdminService{cfg: cfg, repos: repos, oss: oss}
 }
 
 // ListAllFiles returns all files across all users.
@@ -45,8 +50,35 @@ func (s *AdminService) UpdateUserQuota(ctx context.Context, userID uuid.UUID, qu
 }
 
 // DeleteFile permanently deletes any file (admin).
-func (s *AdminService) DeleteFile(ctx context.Context, fileID uuid.UUID) error {
-	return s.repos.Files.PermanentDelete(ctx, fileID)
+func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID) error {
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return err
+	}
+
+	if file.StorageKey != "" {
+		_ = s.oss.DeleteObject(ctx, file.StorageKey)
+	}
+	if file.ThumbnailKey != "" {
+		_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
+	}
+	_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+
+	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     adminID,
+		Action:     "admin_file_deleted",
+		Resource:   "file",
+		ResourceID: &fileID,
+		Details: map[string]any{
+			"owner_id":  file.UserID.String(),
+			"file_name": file.Name,
+		},
+	})
+	return nil
 }
 
 // DeleteVideo permanently deletes any video (admin).
@@ -62,4 +94,139 @@ func (s *AdminService) CleanupTrash(ctx context.Context) (int64, error) {
 // GetUserHistory returns a user's operation history.
 func (s *AdminService) GetUserHistory(ctx context.Context, userID uuid.UUID, offset, limit int) ([]model.AuditLog, int, error) {
 	return s.repos.AuditLogs.ListByUser(ctx, userID, offset, limit)
+}
+
+func (s *AdminService) BanFile(ctx context.Context, fileID, adminID uuid.UUID, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("封禁理由不能为空")
+	}
+	if len([]rune(reason)) > 1000 {
+		return errors.New("封禁理由不能超过 1000 字")
+	}
+
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return err
+	}
+	if file.DeletedAt != nil {
+		return errors.New("文件已删除")
+	}
+	if file.IsDirectory {
+		return errors.New("暂不支持封禁文件夹")
+	}
+
+	if err := s.repos.Files.UpdateModeration(ctx, fileID, "banned", reason, &adminID); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     adminID,
+		Action:     "file_banned",
+		Resource:   "file",
+		ResourceID: &fileID,
+		Details: map[string]any{
+			"owner_id": file.UserID.String(),
+			"reason":   reason,
+		},
+	})
+	return nil
+}
+
+func (s *AdminService) UnbanFile(ctx context.Context, fileID, adminID uuid.UUID, comment string) error {
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.repos.Files.UpdateModeration(ctx, fileID, "normal", "", &adminID); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     adminID,
+		Action:     "file_unbanned",
+		Resource:   "file",
+		ResourceID: &fileID,
+		Details: map[string]any{
+			"owner_id": file.UserID.String(),
+			"comment":  strings.TrimSpace(comment),
+		},
+	})
+	return nil
+}
+
+func (s *AdminService) ListAppeals(ctx context.Context, status string, offset, limit int) ([]model.FileAppeal, int, error) {
+	return s.repos.FileAppeals.List(ctx, status, offset, limit)
+}
+
+func (s *AdminService) ReviewAppeal(ctx context.Context, appealID, adminID uuid.UUID, decision, comment string) error {
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	comment = strings.TrimSpace(comment)
+	if decision != "approve" && decision != "delete" {
+		return errors.New("无效的审核结论，仅支持 approve/delete")
+	}
+
+	appeal, err := s.repos.FileAppeals.FindByID(ctx, appealID)
+	if err != nil {
+		return err
+	}
+	if appeal.Status != "pending" {
+		return errors.New("该工单已处理")
+	}
+
+	file, err := s.repos.Files.FindByID(ctx, appeal.FileID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if decision == "approve" {
+		if err := s.repos.Files.UpdateModeration(ctx, appeal.FileID, "normal", "", &adminID); err != nil {
+			return err
+		}
+		if err := s.repos.FileAppeals.Review(ctx, appealID, "approved", comment, adminID); err != nil {
+			return err
+		}
+		_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+			UserID:     adminID,
+			Action:     "file_appeal_approved",
+			Resource:   "file_appeal",
+			ResourceID: &appealID,
+			Details: map[string]any{
+				"file_id": appeal.FileID.String(),
+				"comment": comment,
+			},
+		})
+		return nil
+	}
+
+	if file != nil {
+		if file.StorageKey != "" {
+			_ = s.oss.DeleteObject(ctx, file.StorageKey)
+		}
+		if file.ThumbnailKey != "" {
+			_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
+		}
+		_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+		if err := s.repos.Files.PermanentDelete(ctx, file.ID); err != nil {
+			return err
+		}
+	}
+
+	if err := s.repos.FileAppeals.Review(ctx, appealID, "deleted", comment, adminID); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     adminID,
+		Action:     "file_appeal_deleted",
+		Resource:   "file_appeal",
+		ResourceID: &appealID,
+		Details: map[string]any{
+			"file_id": appeal.FileID.String(),
+			"comment": comment,
+		},
+	})
+
+	return nil
 }

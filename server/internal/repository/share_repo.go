@@ -40,6 +40,20 @@ func (r *ShareRepository) FindByCode(ctx context.Context, code string) (*model.S
 	return &s, nil
 }
 
+func (r *ShareRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Share, error) {
+	var s model.Share
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, file_id, code, password, expires_at, view_count, created_at
+		 FROM shares WHERE id = $1`, id).Scan(
+		&s.ID, &s.UserID, &s.FileID, &s.Code, &s.Password, &s.ExpiresAt,
+		&s.ViewCount, &s.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 func (r *ShareRepository) IncrementViewCount(ctx context.Context, id uuid.UUID) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE shares SET view_count = view_count + 1 WHERE id = $1`, id)

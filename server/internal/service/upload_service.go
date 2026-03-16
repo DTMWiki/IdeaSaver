@@ -204,13 +204,14 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	publicURL := fmt.Sprintf("%s/s/%s/%s", s.cfg.PublicBaseURL, userID.String(), filepath.Base(task.StorageKey))
 
 	file := &model.File{
-		UserID:     userID,
-		ParentID:   parentID,
-		Name:       task.Filename,
-		StorageKey: task.StorageKey,
-		MimeType:   mimeType,
-		Size:       task.TotalSize,
-		PublicURL:  publicURL,
+		UserID:           userID,
+		ParentID:         parentID,
+		Name:             task.Filename,
+		StorageKey:       task.StorageKey,
+		MimeType:         mimeType,
+		Size:             task.TotalSize,
+		PublicURL:        publicURL,
+		ModerationStatus: "normal",
 	}
 
 	if err := s.repos.Files.Create(ctx, file); err != nil {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Space, Breadcrumb, Dropdown, Input, Modal, Segmented, Tooltip, App } from 'antd'
+import { Button, Space, Breadcrumb, Input, Modal, Segmented, Tooltip, App } from 'antd'
 import {
     UploadOutlined,
     FolderAddOutlined,
@@ -19,6 +19,7 @@ import FileContextMenu from '@/components/FileContextMenu'
 import FilePreview from '@/components/FilePreview'
 import CreateShareModal from '@/components/CreateShareModal'
 import type { FileItem } from '@/types'
+import { submitFileAppeal } from '@/api/files'
 import './Dashboard.css'
 
 export default function Dashboard() {
@@ -36,6 +37,9 @@ export default function Dashboard() {
     const [mkdirName, setMkdirName] = useState('')
     const [previewFile, setPreviewFile] = useState<FileItem | null>(null)
     const [shareFileId, setShareFileId] = useState<string | null>(null)
+    const [appealFile, setAppealFile] = useState<FileItem | null>(null)
+    const [appealReason, setAppealReason] = useState('')
+    const [appealSubmitting, setAppealSubmitting] = useState(false)
 
     // Context menu state
     const [contextMenu, setContextMenu] = useState<{
@@ -113,6 +117,28 @@ export default function Dashboard() {
         setContextMenu({ x: e.clientX, y: e.clientY, file })
     }
 
+    const handleSubmitAppeal = async () => {
+        if (!appealFile) return
+        const reason = appealReason.trim()
+        if (!reason) {
+            message.warning('请填写申诉理由')
+            return
+        }
+
+        setAppealSubmitting(true)
+        try {
+            await submitFileAppeal(appealFile.id, reason)
+            message.success('申诉工单已提交，请等待管理员审核')
+            setAppealFile(null)
+            setAppealReason('')
+        } catch (error: unknown) {
+            const maybeMessage = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+            message.error(maybeMessage || '提交申诉失败')
+        } finally {
+            setAppealSubmitting(false)
+        }
+    }
+
     return (
         <div className="dashboard-page fade-in" onContextMenu={(e) => handleContextMenu(e, null)}>
             {/* Toolbar */}
@@ -177,6 +203,7 @@ export default function Dashboard() {
                     onContextMenu={handleContextMenu}
                     onPreview={setPreviewFile}
                     onShare={(id) => setShareFileId(id)}
+                    onAppeal={setAppealFile}
                 />
             ) : (
                 <FileGrid
@@ -224,6 +251,7 @@ export default function Dashboard() {
                     onClose={() => setContextMenu(null)}
                     onPreview={setPreviewFile}
                     onShare={(id) => setShareFileId(id)}
+                    onAppeal={setAppealFile}
                     onSelectAll={selectAll}
                 />
             )}
@@ -233,6 +261,30 @@ export default function Dashboard() {
 
             {/* Create Share Modal */}
             <CreateShareModal fileId={shareFileId} onClose={() => setShareFileId(null)} />
+
+            {/* Appeal Modal */}
+            <Modal
+                title={appealFile ? `提交申诉：${appealFile.name}` : '提交申诉'}
+                open={!!appealFile}
+                onOk={handleSubmitAppeal}
+                onCancel={() => {
+                    setAppealFile(null)
+                    setAppealReason('')
+                }}
+                okText="提交工单"
+                cancelText="取消"
+                confirmLoading={appealSubmitting}
+                destroyOnClose
+            >
+                <Input.TextArea
+                    value={appealReason}
+                    onChange={(e) => setAppealReason(e.target.value)}
+                    placeholder="请说明你认为该文件应恢复访问的理由（例如用途、来源、已整改内容）"
+                    rows={5}
+                    maxLength={1000}
+                    showCount
+                />
+            </Modal>
         </div>
     )
 }

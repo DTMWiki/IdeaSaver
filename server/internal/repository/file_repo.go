@@ -32,10 +32,12 @@ func (r *FileRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Fil
 	var f model.File
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-		        public_url, thumbnail_key, deleted_at, created_at, updated_at
+		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+		        deleted_at, created_at, updated_at
 		 FROM files WHERE id = $1`, id).Scan(
 		&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.StorageKey, &f.IsDirectory,
 		&f.MimeType, &f.Size, &f.PublicURL, &f.ThumbnailKey,
+		&f.ModerationStatus, &f.ModerationReason, &f.ModeratedBy, &f.ModeratedAt,
 		&f.DeletedAt, &f.CreatedAt, &f.UpdatedAt,
 	)
 	if err != nil {
@@ -51,13 +53,15 @@ func (r *FileRepository) ListByParent(ctx context.Context, userID uuid.UUID, par
 	if parentID == nil {
 		rows, err = r.db.QueryContext(ctx,
 			`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-			        public_url, thumbnail_key, deleted_at, created_at, updated_at
+			        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+			        deleted_at, created_at, updated_at
 			 FROM files WHERE user_id = $1 AND parent_id IS NULL AND deleted_at IS NULL
 			 ORDER BY is_directory DESC, name ASC`, userID)
 	} else {
 		rows, err = r.db.QueryContext(ctx,
 			`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-			        public_url, thumbnail_key, deleted_at, created_at, updated_at
+			        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+			        deleted_at, created_at, updated_at
 			 FROM files WHERE user_id = $1 AND parent_id = $2 AND deleted_at IS NULL
 			 ORDER BY is_directory DESC, name ASC`, userID, parentID)
 	}
@@ -71,6 +75,7 @@ func (r *FileRepository) ListByParent(ctx context.Context, userID uuid.UUID, par
 		var f model.File
 		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.StorageKey,
 			&f.IsDirectory, &f.MimeType, &f.Size, &f.PublicURL, &f.ThumbnailKey,
+			&f.ModerationStatus, &f.ModerationReason, &f.ModeratedBy, &f.ModeratedAt,
 			&f.DeletedAt, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -112,7 +117,8 @@ func (r *FileRepository) PermanentDelete(ctx context.Context, id uuid.UUID) erro
 func (r *FileRepository) ListTrash(ctx context.Context, userID uuid.UUID) ([]model.File, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-		        public_url, thumbnail_key, deleted_at, created_at, updated_at
+		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+		        deleted_at, created_at, updated_at
 		 FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL
 		 ORDER BY deleted_at DESC`, userID)
 	if err != nil {
@@ -125,6 +131,7 @@ func (r *FileRepository) ListTrash(ctx context.Context, userID uuid.UUID) ([]mod
 		var f model.File
 		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.StorageKey,
 			&f.IsDirectory, &f.MimeType, &f.Size, &f.PublicURL, &f.ThumbnailKey,
+			&f.ModerationStatus, &f.ModerationReason, &f.ModeratedBy, &f.ModeratedAt,
 			&f.DeletedAt, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -153,7 +160,8 @@ func (r *FileRepository) ListAll(ctx context.Context, offset, limit int) ([]mode
 
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-		        public_url, thumbnail_key, deleted_at, created_at, updated_at
+		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+		        deleted_at, created_at, updated_at
 		 FROM files WHERE deleted_at IS NULL
 		 ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
@@ -166,6 +174,7 @@ func (r *FileRepository) ListAll(ctx context.Context, offset, limit int) ([]mode
 		var f model.File
 		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.StorageKey,
 			&f.IsDirectory, &f.MimeType, &f.Size, &f.PublicURL, &f.ThumbnailKey,
+			&f.ModerationStatus, &f.ModerationReason, &f.ModeratedBy, &f.ModeratedAt,
 			&f.DeletedAt, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
@@ -175,19 +184,34 @@ func (r *FileRepository) ListAll(ctx context.Context, offset, limit int) ([]mode
 }
 
 // FindByStorageKey finds a file by its OSS storage key.
-func (r *FileRepository) FindByStorageKey(ctx context.Context, userID, filename string) (*model.File, error) {
-	storageKey := userID + "/" + filename
+func (r *FileRepository) FindByStorageKey(ctx context.Context, storageKey string) (*model.File, error) {
 	var f model.File
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-		        public_url, thumbnail_key, deleted_at, created_at, updated_at
+		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+		        deleted_at, created_at, updated_at
 		 FROM files WHERE storage_key = $1 AND deleted_at IS NULL`, storageKey).Scan(
 		&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.StorageKey, &f.IsDirectory,
 		&f.MimeType, &f.Size, &f.PublicURL, &f.ThumbnailKey,
+		&f.ModerationStatus, &f.ModerationReason, &f.ModeratedBy, &f.ModeratedAt,
 		&f.DeletedAt, &f.CreatedAt, &f.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &f, nil
+}
+
+func (r *FileRepository) UpdateModeration(ctx context.Context, id uuid.UUID, status, reason string, adminID *uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE files
+		 SET moderation_status = $2,
+		     moderation_reason = $3,
+		     moderated_by = $4,
+		     moderated_at = NOW(),
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id, status, reason, adminID,
+	)
+	return err
 }

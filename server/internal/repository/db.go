@@ -10,7 +10,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-//go:embed ../migrations/*.sql
+//go:embed migrations/*.sql
 var migrationFS embed.FS
 
 // NewDB creates a new database connection.
@@ -34,7 +34,7 @@ func NewDB(databaseURL string) (*sql.DB, error) {
 
 // Migrate runs all SQL migration files.
 func Migrate(db *sql.DB) error {
-	entries, err := migrationFS.ReadDir("../migrations")
+	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("failed to read migrations directory: %w", err)
 	}
@@ -44,7 +44,7 @@ func Migrate(db *sql.DB) error {
 			continue
 		}
 
-		content, err := migrationFS.ReadFile("../migrations/" + entry.Name())
+		content, err := migrationFS.ReadFile("migrations/" + entry.Name())
 		if err != nil {
 			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
@@ -60,12 +60,13 @@ func Migrate(db *sql.DB) error {
 
 // Repositories holds all repository instances.
 type Repositories struct {
-	Users      *UserRepository
-	Files      *FileRepository
-	Videos     *VideoRepository
-	Shares     *ShareRepository
+	Users       *UserRepository
+	Files       *FileRepository
+	FileAppeals *FileAppealRepository
+	Videos      *VideoRepository
+	Shares      *ShareRepository
 	UploadTasks *UploadTaskRepository
-	AuditLogs  *AuditLogRepository
+	AuditLogs   *AuditLogRepository
 }
 
 // NewRepositories creates all repository instances.
@@ -73,6 +74,7 @@ func NewRepositories(db *sql.DB) *Repositories {
 	return &Repositories{
 		Users:       NewUserRepository(db),
 		Files:       NewFileRepository(db),
+		FileAppeals: NewFileAppealRepository(db),
 		Videos:      NewVideoRepository(db),
 		Shares:      NewShareRepository(db),
 		UploadTasks: NewUploadTaskRepository(db),

@@ -1,6 +1,7 @@
 <p align="center">
   <h1 align="center">📦 IdeaSaver</h1>
   <p align="center">DTMWiki 文件上传分发平台</p>
+  <p align="center"><a href="./README.en.md">English</a> | 中文（默认）</p>
 </p>
 
 <p align="center">
@@ -27,6 +28,7 @@ IdeaSaver 是由 DTMWiki 开发的轻量级文件上传分发平台。用户通�
 - 🔗 **直链生成** — 上传完成后自动生成直链 URL 和 Markdown 引用
 - 🗑️ **回收站** — 误删文件可恢复，30天自动清理
 - 📤 **分享链接** — 带密码/有效期的分享短链
+- 🚫 **资源封禁与申诉** — 管理员可封禁文件，用户可提交申诉，管理员复审通过或彻底删除
 
 ### 视频管理
 - 🎬 **视频上传** — 视频文件自动上传到多吉云视频云
@@ -37,6 +39,7 @@ IdeaSaver 是由 DTMWiki 开发的轻量级文件上传分发平台。用户通�
 - 🔐 **Authelia OAuth2** — 统一登录认证
 - 👥 **权限管理** — 管理员/普通用户角色
 - 📊 **审计日志** — 所有操作留有日志
+- 🧾 **申诉工单** — 封禁资源支持工单复审与处理意见记录
 - 💾 **存储配额** — 管理员可管理用户存储配额
 
 ### 系统特性
@@ -86,7 +89,11 @@ IdeaSaver/
 ├── deploy/              # 部署配置
 │   ├── nginx/           # Nginx 配置
 │   └── systemd/         # systemd 服务
+├── .github/             # GitHub 模板与 CI
+├── go.mod
+├── go.sum
 ├── README.md
+├── README.en.md
 ├── LICENSE
 ├── .gitignore
 └── Makefile
@@ -96,7 +103,7 @@ IdeaSaver/
 
 ### 环境要求
 
-- Go 1.22+
+- Go 1.23+
 - Node.js 20+
 - PostgreSQL 15+
 - Nginx

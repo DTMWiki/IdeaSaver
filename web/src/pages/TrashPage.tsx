@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Space, Typography, Empty, Spin, App, Popconfirm } from 'antd'
+import { Table, Button, Space, Typography, Empty, App, Popconfirm } from 'antd'
 import { UndoOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { FileItem } from '@/types'
 import { listTrash, restoreFile, permanentDelete } from '@/api/files'
@@ -10,7 +10,6 @@ const { Title, Text } = Typography
 export default function TrashPage() {
     const [files, setFiles] = useState<FileItem[]>([])
     const [loading, setLoading] = useState(true)
-    const [selectedIds, setSelectedIds] = useState<string[]>([])
     const { message, modal } = App.useApp()
 
     const fetchTrash = async () => {

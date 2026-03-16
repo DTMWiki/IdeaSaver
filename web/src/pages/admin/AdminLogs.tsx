@@ -18,6 +18,11 @@ const ACTION_OPTIONS = [
     { label: '恢复', value: 'restore' },
     { label: '视频上传', value: 'video_upload' },
     { label: '视频删除', value: 'video_delete' },
+    { label: '文件封禁', value: 'file_banned' },
+    { label: '文件解封', value: 'file_unbanned' },
+    { label: '提交申诉', value: 'file_appeal_submitted' },
+    { label: '申诉通过', value: 'file_appeal_approved' },
+    { label: '申诉删除', value: 'file_appeal_deleted' },
 ]
 
 const ACTION_COLORS: Record<string, string> = {
@@ -31,6 +36,11 @@ const ACTION_COLORS: Record<string, string> = {
     restore: 'lime',
     video_upload: 'geekblue',
     video_delete: 'volcano',
+    file_banned: 'red',
+    file_unbanned: 'green',
+    file_appeal_submitted: 'orange',
+    file_appeal_approved: 'cyan',
+    file_appeal_deleted: 'volcano',
 }
 
 export default function AdminLogs() {

@@ -16,6 +16,7 @@ import {
     MenuUnfoldOutlined,
     SunOutlined,
     MoonOutlined,
+    FlagOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -99,6 +100,12 @@ export default function AppLayout() {
                         label: '审计日志',
                         onClick: () => navigate('/admin/logs'),
                     },
+                    {
+                        key: 'admin-appeals',
+                        icon: <FlagOutlined />,
+                        label: '申诉工单',
+                        onClick: () => navigate('/admin/appeals'),
+                    },
                 ],
             },
         ]
@@ -116,6 +123,7 @@ export default function AppLayout() {
         if (path.includes('/admin/videos')) return 'admin-videos'
         if (path.includes('/admin/users')) return 'admin-users'
         if (path.includes('/admin/logs')) return 'admin-logs'
+        if (path.includes('/admin/appeals')) return 'admin-appeals'
         return 'files'
     }
 

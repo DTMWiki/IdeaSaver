@@ -3,7 +3,7 @@
 ## 环境要求
 
 - Debian 12 (Bookworm)
-- Go 1.22+ (仅编译时需要)
+- Go 1.23+ (仅编译时需要)
 - PostgreSQL 15+
 - Nginx (已安装)
 - 域名 `i.dtmwiki.cn` 已解析
@@ -42,6 +42,12 @@ npm install && npm run build
 scp server/ideasaver user@server:/opt/ideasaver/
 scp cli/ideactl user@server:/usr/local/bin/
 scp -r web/dist user@server:/opt/ideasaver/web/
+```
+
+如果你使用源码包上传，可先在本地执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/scripts/package_source.ps1
 ```
 
 ## 4. 配置数据库
@@ -110,7 +116,16 @@ identity_providers:
 ideactl status       # 检查服务运行状态
 ideactl logs         # 查看实时日志
 curl -s https://i.dtmwiki.cn/api/auth/login | jq  # 验证 API 可达
+bash deploy/scripts/smoke_test.sh                  # 执行冒烟脚本
 ```
+
+---
+
+## 发布与回滚文档
+
+- 发布清单: [release-checklist.md](./release-checklist.md)
+- 回滚预案: [rollback-plan.md](./rollback-plan.md)
+- 手动验收脚本: [manual-acceptance.md](./manual-acceptance.md)
 
 ---
 

@@ -29,15 +29,22 @@ type Claims struct {
 func Auth(cfg *config.Config, userRepo *repository.UserRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录，请先登录"})
-			c.Abort()
-			return
+		tokenStr := ""
+		if authHeader != "" {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+			if tokenStr == authHeader {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的认证格式"})
+				c.Abort()
+				return
+			}
 		}
 
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenStr == authHeader {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的认证格式"})
+		// EventSource/fetch image preview cannot set custom Authorization header.
+		if tokenStr == "" && c.Request.Method == http.MethodGet {
+			tokenStr = c.Query("token")
+		}
+		if tokenStr == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录，请先登录"})
 			c.Abort()
 			return
 		}

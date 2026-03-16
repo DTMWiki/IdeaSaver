@@ -10,6 +10,7 @@ import {
     LinkOutlined,
     FolderOpenOutlined,
     SelectOutlined,
+    FlagOutlined,
 } from '@ant-design/icons'
 import type { FileItem } from '@/types'
 import { useFileStore } from '@/stores/fileStore'
@@ -24,11 +25,12 @@ interface FileContextMenuProps {
     onClose: () => void
     onPreview: (file: FileItem) => void
     onShare: (fileId: string) => void
+    onAppeal: (file: FileItem) => void
     onSelectAll: () => void
 }
 
 export default function FileContextMenu({
-    x, y, file, onClose, onPreview, onShare, onSelectAll,
+    x, y, file, onClose, onPreview, onShare, onAppeal, onSelectAll,
 }: FileContextMenuProps) {
     const ref = useRef<HTMLDivElement>(null)
     const { navigateTo, renameFile, setClipboard, deleteSelected, toggleSelect } = useFileStore()
@@ -118,7 +120,11 @@ export default function FileContextMenu({
         } else {
             items.push({ key: 'preview', icon: <EyeOutlined />, label: '预览', onClick: () => { onPreview(file); onClose() } })
             items.push({ key: 'link', icon: <LinkOutlined />, label: '复制直链', onClick: handleCopyLink })
-            items.push({ key: 'share', icon: <ShareAltOutlined />, label: '分享', onClick: () => { onShare(file.id); onClose() } })
+            if (file.moderation_status !== 'banned') {
+                items.push({ key: 'share', icon: <ShareAltOutlined />, label: '分享', onClick: () => { onShare(file.id); onClose() } })
+            } else {
+                items.push({ key: 'appeal', icon: <FlagOutlined />, label: '提交申诉', onClick: () => { onAppeal(file); onClose() } })
+            }
         }
         items.push({ type: 'divider' as const })
         items.push({ key: 'rename', icon: <EditOutlined />, label: '重命名', onClick: () => { setRenameName(file.name); setRenaming(true) } })

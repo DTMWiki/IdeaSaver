@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import { Modal, Input, Select, Space, Typography, App } from 'antd'
-import { CopyOutlined } from '@ant-design/icons'
 import { createShare } from '@/api/files'
-import { copyToClipboard } from '@/utils/format'
 
 const { Text, Paragraph } = Typography
 
@@ -39,12 +37,6 @@ export default function CreateShareModal({ fileId, onClose }: CreateShareModalPr
         } finally {
             setLoading(false)
         }
-    }
-
-    const handleCopy = async () => {
-        if (!shareUrl) return
-        await copyToClipboard(shareUrl)
-        message.success('分享链接已复制')
     }
 
     const handleClose = () => {

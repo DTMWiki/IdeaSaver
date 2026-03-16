@@ -18,6 +18,7 @@ const AdminFiles = lazy(() => import('@/pages/admin/AdminFiles'))
 const AdminVideos = lazy(() => import('@/pages/admin/AdminVideos'))
 const AdminUsers = lazy(() => import('@/pages/admin/AdminUsers'))
 const AdminLogs = lazy(() => import('@/pages/admin/AdminLogs'))
+const AdminAppeals = lazy(() => import('@/pages/admin/AdminAppeals'))
 
 function PageLoading() {
   return (
@@ -51,6 +52,7 @@ export default function App() {
               <Route path="/admin/videos" element={<AdminVideos />} />
               <Route path="/admin/users" element={<AdminUsers />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
+              <Route path="/admin/appeals" element={<AdminAppeals />} />
             </Route>
           </Route>
         </Route>

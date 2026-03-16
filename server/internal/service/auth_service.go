@@ -130,3 +130,8 @@ func (s *AuthService) generateJWT(user *model.User) (string, error) {
 func (s *AuthService) GetUser(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	return s.userRepo.FindByID(ctx, id)
 }
+
+// UserRepo exposes user repository for auth middleware wiring.
+func (s *AuthService) UserRepo() *repository.UserRepository {
+	return s.userRepo
+}

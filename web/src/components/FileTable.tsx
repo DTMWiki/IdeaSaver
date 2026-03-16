@@ -1,4 +1,4 @@
-import { Table, Checkbox, Space, Typography, Button, Tooltip } from 'antd'
+import { Table, Checkbox, Space, Typography, Button, Tooltip, Tag } from 'antd'
 import {
     FolderFilled,
     FileImageOutlined,
@@ -9,6 +9,7 @@ import {
     EyeOutlined,
     LinkOutlined,
     ShareAltOutlined,
+    FlagOutlined,
 } from '@ant-design/icons'
 import { App } from 'antd'
 import type { FileItem } from '@/types'
@@ -25,6 +26,7 @@ interface FileTableProps {
     onContextMenu: (e: React.MouseEvent, file: FileItem) => void
     onPreview: (file: FileItem) => void
     onShare: (fileId: string) => void
+    onAppeal: (file: FileItem) => void
 }
 
 function getFileIcon(file: FileItem) {
@@ -36,7 +38,7 @@ function getFileIcon(file: FileItem) {
     return <FileOutlined style={{ color: '#8c8c8c', fontSize: 18 }} />
 }
 
-export default function FileTable({ files, loading, selectedIds, onContextMenu, onPreview, onShare }: FileTableProps) {
+export default function FileTable({ files, loading, selectedIds, onContextMenu, onPreview, onShare, onAppeal }: FileTableProps) {
     const { toggleSelect, navigateTo } = useFileStore()
     const { message } = App.useApp()
 
@@ -93,6 +95,24 @@ export default function FileTable({ files, loading, selectedIds, onContextMenu, 
                 record.is_directory ? '-' : formatBytes(size),
         },
         {
+            title: '状态',
+            dataIndex: 'moderation_status',
+            key: 'moderation_status',
+            width: 120,
+            render: (_: string, record: FileItem) => {
+                if (record.is_directory) return '-'
+                if (record.moderation_status === 'banned') {
+                    const reason = record.moderation_reason?.trim()
+                    return (
+                        <Tooltip title={reason || '管理员已封禁该文件'}>
+                            <Tag color="red">已封禁</Tag>
+                        </Tooltip>
+                    )
+                }
+                return <Tag color="green">正常</Tag>
+            },
+        },
+        {
             title: '修改时间',
             dataIndex: 'updated_at',
             key: 'updated_at',
@@ -102,7 +122,7 @@ export default function FileTable({ files, loading, selectedIds, onContextMenu, 
         {
             title: '操作',
             key: 'actions',
-            width: 120,
+            width: 180,
             render: (_: unknown, record: FileItem) =>
                 record.is_directory ? null : (
                     <Space size={4}>
@@ -112,9 +132,15 @@ export default function FileTable({ files, loading, selectedIds, onContextMenu, 
                         <Tooltip title="直链">
                             <Button type="text" size="small" icon={<LinkOutlined />} onClick={(e) => { e.stopPropagation(); handleCopyLink(record) }} />
                         </Tooltip>
-                        <Tooltip title="分享">
-                            <Button type="text" size="small" icon={<ShareAltOutlined />} onClick={(e) => { e.stopPropagation(); onShare(record.id) }} />
-                        </Tooltip>
+                        {record.moderation_status === 'banned' ? (
+                            <Tooltip title="提交申诉">
+                                <Button type="text" size="small" icon={<FlagOutlined />} onClick={(e) => { e.stopPropagation(); onAppeal(record) }} />
+                            </Tooltip>
+                        ) : (
+                            <Tooltip title="分享">
+                                <Button type="text" size="small" icon={<ShareAltOutlined />} onClick={(e) => { e.stopPropagation(); onShare(record.id) }} />
+                            </Tooltip>
+                        )}
                     </Space>
                 ),
         },

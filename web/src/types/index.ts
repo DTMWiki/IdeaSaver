@@ -23,6 +23,10 @@ export interface FileItem {
     size: number
     public_url?: string
     thumbnail_key?: string
+    moderation_status: 'normal' | 'banned'
+    moderation_reason?: string
+    moderated_by?: string | null
+    moderated_at?: string | null
     deleted_at?: string | null
     created_at: string
     updated_at: string
@@ -81,6 +85,22 @@ export interface AuditLog {
     user_agent?: string
     created_at: string
     username?: string
+}
+
+export interface FileAppeal {
+    id: string
+    file_id: string
+    user_id: string
+    status: 'pending' | 'approved' | 'deleted' | 'rejected'
+    reason: string
+    admin_comment?: string
+    reviewed_by?: string | null
+    reviewed_at?: string | null
+    created_at: string
+    updated_at: string
+    file_name?: string
+    username?: string
+    reviewer_name?: string
 }
 
 // Breadcrumb item for file navigation

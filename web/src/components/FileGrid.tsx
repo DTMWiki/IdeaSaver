@@ -1,4 +1,4 @@
-import { Spin, Empty } from 'antd'
+import { Spin, Empty, Tag } from 'antd'
 import {
     FolderFilled,
     FileImageOutlined,
@@ -65,12 +65,17 @@ export default function FileGrid({ files, loading, selectedIds, onContextMenu, o
                 {files.map((file) => (
                     <div
                         key={file.id}
-                        className={`file-grid-item ${selectedIds.has(file.id) ? 'selected' : ''}`}
+                        className={`file-grid-item ${selectedIds.has(file.id) ? 'selected' : ''} ${file.moderation_status === 'banned' ? 'banned' : ''}`}
                         onClick={(e) => handleClick(file, e)}
                         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, file) }}
                     >
                         <div className="file-grid-icon">{getGridIcon(file)}</div>
                         <div className="file-grid-name">{file.name}</div>
+                        {file.moderation_status === 'banned' && !file.is_directory && (
+                            <Tag color="red" style={{ margin: 0 }}>
+                                已封禁
+                            </Tag>
+                        )}
                     </div>
                 ))}
             </div>

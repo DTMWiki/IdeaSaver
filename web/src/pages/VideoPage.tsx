@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Row, Col, Button, Space, Typography, Tag, Switch, Popconfirm, Empty, Spin, Modal, Input, App, Pagination } from 'antd'
+import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination } from 'antd'
 import {
     UploadOutlined,
     PlayCircleOutlined,
@@ -10,7 +10,7 @@ import { useVideoStore } from '@/stores/videoStore'
 import { getPlayURL } from '@/api/videos'
 import { formatBytes, formatDate } from '@/utils/format'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 
 export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, uploadVideo, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()

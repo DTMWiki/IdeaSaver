@@ -1,5 +1,5 @@
 import client from './client'
-import type { FileItem, Video, AuditLog, User } from '@/types'
+import type { FileItem, Video, AuditLog, User, FileAppeal } from '@/types'
 
 export async function listAllFiles(
     offset = 0,
@@ -11,6 +11,14 @@ export async function listAllFiles(
 
 export async function adminDeleteFile(id: string): Promise<void> {
     await client.delete(`/admin/files/${id}`)
+}
+
+export async function adminBanFile(id: string, reason: string): Promise<void> {
+    await client.put(`/admin/files/${id}/ban`, { reason })
+}
+
+export async function adminUnbanFile(id: string, comment?: string): Promise<void> {
+    await client.put(`/admin/files/${id}/unban`, { comment })
 }
 
 export async function listAllVideos(
@@ -51,4 +59,23 @@ export async function updateUserQuota(id: string, quota: number): Promise<void> 
 export async function cleanupTrash(): Promise<number> {
     const { data } = await client.delete('/admin/trash/cleanup')
     return data.cleaned
+}
+
+export async function listAppeals(
+    status?: string,
+    offset = 0,
+    limit = 50,
+): Promise<{ appeals: FileAppeal[]; total: number }> {
+    const params: Record<string, string | number> = { offset, limit }
+    if (status) params.status = status
+    const { data } = await client.get('/admin/appeals', { params })
+    return { appeals: data.appeals || [], total: data.total || 0 }
+}
+
+export async function reviewAppeal(
+    id: string,
+    decision: 'approve' | 'delete',
+    comment?: string,
+): Promise<void> {
+    await client.put(`/admin/appeals/${id}/review`, { decision, comment })
 }

@@ -74,3 +74,8 @@ export async function createShare(
     })
     return data.share
 }
+
+export async function submitFileAppeal(id: string, reason: string): Promise<import('@/types').FileAppeal> {
+    const { data } = await client.post(`/files/${id}/appeal`, { reason })
+    return data.appeal
+}
