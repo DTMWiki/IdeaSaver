@@ -44,9 +44,9 @@ GitHub 新版仓库设置通常把旧的分支保护入口合并到了：
   - `Require conversation resolution before merging`
   - `Require status checks to pass`
 - Required status checks 添加：
-  - `CI / backend (push)`
-  - `CI / frontend (push)`
-  - `Branch Policy / enforce-flow (pull_request)`
+  - `CI / backend`
+  - `CI / frontend`
+  - `Branch Policy / enforce-flow`
 
 ### 3. 创建 `canary` 规则
 
@@ -58,9 +58,9 @@ GitHub 新版仓库设置通常把旧的分支保护入口合并到了：
   - `Require a pull request before merging`
   - `Require status checks to pass`
 - Required status checks 添加：
-  - `CI / backend (push)`
-  - `CI / frontend (push)`
-  - `Branch Policy / enforce-flow (pull_request)`
+  - `CI / backend`
+  - `CI / frontend`
+  - `Branch Policy / enforce-flow`
 
 ### 4. 创建 `dev` 规则（轻保护）
 
