@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -36,10 +37,18 @@ type OSSClient struct {
 }
 
 type dogeTmpTokenProvider struct {
-	apiBase   string
-	accessID  string
-	secretKey string
-	client    *http.Client
+	apiBase         string
+	accessID        string
+	secretKey       string
+	preferredBucket string
+	client          *http.Client
+}
+
+type dogeTmpTokenResult struct {
+	Credentials aws.Credentials
+	S3Endpoint  string
+	S3Bucket    string
+	Region      string
 }
 
 type dogeTmpTokenResponse struct {
@@ -54,9 +63,21 @@ type dogeTmpTokenResponse struct {
 			Expiration      any    `json:"expiration"`
 			ExpiresAt       any    `json:"expiresAt"`
 		} `json:"Credentials"`
-		ExpiredTime any `json:"expiredTime"`
-		Expiration  any `json:"expiration"`
-		ExpiresAt   any `json:"expiresAt"`
+		ExpiredTime any    `json:"expiredTime"`
+		Expiration  any    `json:"expiration"`
+		ExpiresAt   any    `json:"expiresAt"`
+		S3Endpoint  string `json:"s3Endpoint"`
+		S3Bucket    string `json:"s3Bucket"`
+		S3Region    string `json:"s3Region"`
+		Endpoint    string `json:"endpoint"`
+		Bucket      string `json:"bucket"`
+		Region      string `json:"region"`
+		Buckets     []struct {
+			Name           string `json:"name"`
+			S3Bucket       string `json:"s3Bucket"`
+			S3Endpoint     string `json:"s3Endpoint"`
+			S3EndpointHost string `json:"s3EndpointHost"`
+		} `json:"Buckets"`
 	} `json:"data"`
 }
 
@@ -65,39 +86,56 @@ func NewOSSClient(cfg *config.Config) (*OSSClient, error) {
 	if cfg.DogeAccessKey == "" || cfg.DogeSecretKey == "" {
 		return nil, fmt.Errorf("DogeCloud access credentials are required")
 	}
-	if cfg.DogeEndpoint == "" {
-		return nil, fmt.Errorf("IDEASAVER_DOGE_ENDPOINT is required")
-	}
-	if cfg.DogeBucket == "" {
-		return nil, fmt.Errorf("IDEASAVER_DOGE_BUCKET is required")
-	}
-
-	region := cfg.DogeRegion
-	if region == "" {
-		region = dogeDefaultRegion
-	}
 
 	apiBase := cfg.DogeVCloudAPI
 	if apiBase == "" {
 		apiBase = dogeDefaultAPIServer
 	}
 
-	resolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, region string, options ...any) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL: cfg.DogeEndpoint,
-			}, nil
-		},
-	)
-
 	provider := &dogeTmpTokenProvider{
-		apiBase:   strings.TrimRight(apiBase, "/"),
-		accessID:  cfg.DogeAccessKey,
-		secretKey: cfg.DogeSecretKey,
+		apiBase:         strings.TrimRight(apiBase, "/"),
+		accessID:        cfg.DogeAccessKey,
+		secretKey:       cfg.DogeSecretKey,
+		preferredBucket: strings.TrimSpace(cfg.DogeBucket),
 		client: &http.Client{
 			Timeout: 20 * time.Second,
 		},
 	}
+
+	// Resolve OSS endpoint/bucket from temp-token response first, then fallback to env.
+	initial, err := provider.fetchToken(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch DogeCloud temp token metadata: %w", err)
+	}
+
+	endpoint := firstNonEmpty(initial.S3Endpoint, cfg.DogeEndpoint)
+	endpoint = normalizeEndpointURL(endpoint)
+	if endpoint == "" {
+		return nil, fmt.Errorf("missing OSS endpoint: set IDEASAVER_DOGE_ENDPOINT or ensure tmp-token API returns s3Endpoint")
+	}
+
+	bucket := firstNonEmpty(initial.S3Bucket, cfg.DogeBucket)
+	if bucket == "" {
+		return nil, fmt.Errorf("missing OSS bucket: set IDEASAVER_DOGE_BUCKET or ensure tmp-token API returns s3Bucket")
+	}
+
+	region := firstNonEmpty(initial.Region, cfg.DogeRegion)
+	if region == "" {
+		if parsed, ok := extractRegionFromEndpoint(endpoint); ok {
+			region = parsed
+		} else {
+			region = dogeDefaultRegion
+		}
+	}
+
+	resolver := aws.EndpointResolverWithOptionsFunc(
+		func(service, region string, options ...any) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL: endpoint,
+			}, nil
+		},
+	)
+
 	cachedProvider := aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) {
 		o.ExpiryWindow = dogeCredRefreshWindow
 	})
@@ -117,15 +155,23 @@ func NewOSSClient(cfg *config.Config) (*OSSClient, error) {
 
 	return &OSSClient{
 		client: client,
-		bucket: cfg.DogeBucket,
+		bucket: bucket,
 	}, nil
 }
 
 func (p *dogeTmpTokenProvider) Retrieve(ctx context.Context) (aws.Credentials, error) {
+	token, err := p.fetchToken(ctx)
+	if err != nil {
+		return aws.Credentials{}, err
+	}
+	return token.Credentials, nil
+}
+
+func (p *dogeTmpTokenProvider) fetchToken(ctx context.Context) (*dogeTmpTokenResult, error) {
 	body := `{"channel":"` + dogeTmpTokenChannel + `","scopes":["*"]}`
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+dogeTmpTokenPath, strings.NewReader(body))
 	if err != nil {
-		return aws.Credentials{}, err
+		return nil, err
 	}
 
 	token := signDogeRequest(p.secretKey, dogeTmpTokenPath, body)
@@ -134,18 +180,18 @@ func (p *dogeTmpTokenProvider) Retrieve(ctx context.Context) (aws.Credentials, e
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return aws.Credentials{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return aws.Credentials{}, err
+		return nil, err
 	}
 
-	creds, err := parseDogeTmpTokenResponse(raw)
+	creds, err := parseDogeTmpTokenResponse(raw, p.preferredBucket)
 	if err != nil {
-		return aws.Credentials{}, err
+		return nil, err
 	}
 
 	return creds, nil
@@ -158,20 +204,20 @@ func signDogeRequest(secretKey, requestURI, body string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func parseDogeTmpTokenResponse(raw []byte) (aws.Credentials, error) {
+func parseDogeTmpTokenResponse(raw []byte, preferredBucket string) (*dogeTmpTokenResult, error) {
 	var payload dogeTmpTokenResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return aws.Credentials{}, fmt.Errorf("failed to parse DogeCloud tmp token response: %w", err)
+		return nil, fmt.Errorf("failed to parse DogeCloud tmp token response: %w", err)
 	}
 	if payload.Code != 200 {
-		return aws.Credentials{}, fmt.Errorf("DogeCloud tmp token failed, code=%d msg=%s", payload.Code, payload.Msg)
+		return nil, fmt.Errorf("DogeCloud tmp token failed, code=%d msg=%s", payload.Code, payload.Msg)
 	}
 
 	accessKeyID := strings.TrimSpace(payload.Data.Credentials.AccessKeyID)
 	secretAccessKey := strings.TrimSpace(payload.Data.Credentials.SecretAccessKey)
 	sessionToken := strings.TrimSpace(payload.Data.Credentials.SessionToken)
 	if accessKeyID == "" || secretAccessKey == "" || sessionToken == "" {
-		return aws.Credentials{}, fmt.Errorf("DogeCloud tmp token response missing credentials")
+		return nil, fmt.Errorf("DogeCloud tmp token response missing credentials")
 	}
 
 	expireAt := time.Now().Add(dogeDefaultCredTTL)
@@ -186,14 +232,76 @@ func parseDogeTmpTokenResponse(raw []byte) (aws.Credentials, error) {
 		expireAt = parsed
 	}
 
-	return aws.Credentials{
-		AccessKeyID:     accessKeyID,
-		SecretAccessKey: secretAccessKey,
-		SessionToken:    sessionToken,
-		Source:          "dogecloud/tmp_token",
-		CanExpire:       true,
-		Expires:         expireAt,
+	endpoint := firstNonEmpty(payload.Data.S3Endpoint, payload.Data.Endpoint)
+	bucket := firstNonEmpty(payload.Data.S3Bucket, payload.Data.Bucket)
+	selected, selectedByPreference := selectBucket(payload.Data.Buckets, preferredBucket)
+	if selected != nil {
+		if selectedByPreference {
+			// Respect explicit bucket selection from config when available in API response.
+			bucket = firstNonEmpty(selected.S3Bucket, bucket)
+			endpoint = firstNonEmpty(selected.S3Endpoint, endpoint)
+		} else {
+			// Fill missing fields from first available bucket entry.
+			bucket = firstNonEmpty(bucket, selected.S3Bucket)
+			endpoint = firstNonEmpty(endpoint, selected.S3Endpoint)
+		}
+	}
+	endpoint = normalizeEndpointURL(endpoint)
+	region := firstNonEmpty(payload.Data.S3Region, payload.Data.Region)
+	if region == "" && endpoint != "" {
+		if parsed, ok := extractRegionFromEndpoint(endpoint); ok {
+			region = parsed
+		}
+	}
+
+	return &dogeTmpTokenResult{
+		Credentials: aws.Credentials{
+			AccessKeyID:     accessKeyID,
+			SecretAccessKey: secretAccessKey,
+			SessionToken:    sessionToken,
+			Source:          "dogecloud/tmp_token",
+			CanExpire:       true,
+			Expires:         expireAt,
+		},
+		S3Endpoint: endpoint,
+		S3Bucket:   strings.TrimSpace(bucket),
+		Region:     strings.TrimSpace(region),
 	}, nil
+}
+
+type dogeBucketInfo struct {
+	Name       string
+	S3Bucket   string
+	S3Endpoint string
+}
+
+func selectBucket(buckets []struct {
+	Name           string `json:"name"`
+	S3Bucket       string `json:"s3Bucket"`
+	S3Endpoint     string `json:"s3Endpoint"`
+	S3EndpointHost string `json:"s3EndpointHost"`
+}, preferred string) (*dogeBucketInfo, bool) {
+	if len(buckets) == 0 {
+		return nil, false
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		for _, b := range buckets {
+			if strings.EqualFold(strings.TrimSpace(b.Name), preferred) || strings.EqualFold(strings.TrimSpace(b.S3Bucket), preferred) {
+				return &dogeBucketInfo{
+					Name:       strings.TrimSpace(b.Name),
+					S3Bucket:   strings.TrimSpace(b.S3Bucket),
+					S3Endpoint: strings.TrimSpace(b.S3Endpoint),
+				}, true
+			}
+		}
+	}
+	b := buckets[0]
+	return &dogeBucketInfo{
+		Name:       strings.TrimSpace(b.Name),
+		S3Bucket:   strings.TrimSpace(b.S3Bucket),
+		S3Endpoint: strings.TrimSpace(b.S3Endpoint),
+	}, false
 }
 
 func parseDogeExpiration(values ...any) (time.Time, bool) {
@@ -254,6 +362,57 @@ func unixTimestampToTime(ts int64) (time.Time, bool) {
 		return time.UnixMilli(ts), true
 	}
 	return time.Unix(ts, 0), true
+}
+
+func normalizeEndpointURL(endpoint string) string {
+	ep := strings.TrimSpace(endpoint)
+	if ep == "" {
+		return ""
+	}
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep
+	}
+	return strings.TrimRight(ep, "/")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func extractRegionFromEndpoint(endpoint string) (string, bool) {
+	host := strings.TrimSpace(endpoint)
+	if host == "" {
+		return "", false
+	}
+
+	if strings.Contains(host, "://") {
+		if parsed, err := url.Parse(host); err == nil {
+			host = parsed.Hostname()
+		}
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", false
+	}
+
+	parts := strings.Split(host, ".")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "ap-") || strings.HasPrefix(part, "cn-") || strings.HasPrefix(part, "us-") || strings.HasPrefix(part, "eu-") {
+			return part, true
+		}
+	}
+
+	if len(parts) >= 2 && (parts[0] == "cos" || parts[0] == "s3") {
+		return parts[1], true
+	}
+	return "", false
 }
 
 // PutObject uploads an object to OSS.

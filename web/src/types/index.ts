@@ -67,6 +67,9 @@ export interface Video {
     title: string
     vid: string
     vcode: string
+    player_user_id?: string
+    thumbnail_url?: string
+    thumbnail_small_url?: string
     status: number // 0=disabled 1=enabled
     play_url?: string
     size: number

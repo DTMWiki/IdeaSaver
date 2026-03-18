@@ -1,6 +1,14 @@
 import client from './client'
 import type { Video } from '@/types'
 
+export interface VideoPlayInfo {
+    ready: boolean
+    play_url?: string
+    vcode?: string
+    player_user_id?: string
+    message?: string
+}
+
 export async function uploadVideo(
     file: File,
     title?: string,
@@ -37,6 +45,14 @@ export async function batchDeleteVideos(ids: string[]): Promise<void> {
 }
 
 export async function getPlayURL(id: string): Promise<string> {
-    const { data } = await client.get(`/videos/${id}/play`)
-    return data.play_url
+    const info = await getPlayInfo(id)
+    if (!info.play_url) {
+        throw new Error(info.message || '播放地址尚未就绪')
+    }
+    return info.play_url
+}
+
+export async function getPlayInfo(id: string): Promise<VideoPlayInfo> {
+    const { data } = await client.get(`/videos/${id}/play-info`)
+    return data
 }

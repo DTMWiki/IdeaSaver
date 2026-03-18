@@ -6,11 +6,14 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/DTMWiki/IdeaSaver/server/internal/repository"
 	"github.com/DTMWiki/IdeaSaver/server/internal/storage"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 )
@@ -128,21 +131,25 @@ func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userI
 	if task.UploadID != "" {
 		// Multipart upload: upload part
 		partNumber := int32(chunkIndex + 1) // S3 parts are 1-indexed
-		_, err := s.oss.UploadPart(ctx, task.StorageKey, task.UploadID, partNumber, body, size)
+		etag, err := s.oss.UploadPart(ctx, task.StorageKey, task.UploadID, partNumber, body, size)
 		if err != nil {
 			return fmt.Errorf("failed to upload part: %w", err)
 		}
+
+		newChunks := task.UploadedChunks + 1
+		newSize := task.UploadedSize + size
+		return s.repos.UploadTasks.UpdateMultipartPart(ctx, taskID, partNumber, etag, newChunks, newSize)
 	} else {
 		// Small file: single put
 		if err := s.oss.PutObject(ctx, task.StorageKey, body, "", size); err != nil {
 			return fmt.Errorf("failed to upload: %w", err)
 		}
-	}
 
-	// Update progress
-	newChunks := task.UploadedChunks + 1
-	newSize := task.UploadedSize + size
-	return s.repos.UploadTasks.UpdateChunkProgress(ctx, taskID, newChunks, newSize)
+		// Update progress
+		newChunks := task.UploadedChunks + 1
+		newSize := task.UploadedSize + size
+		return s.repos.UploadTasks.UpdateChunkProgress(ctx, taskID, newChunks, newSize)
+	}
 }
 
 // PauseUpload pauses an upload task.
@@ -186,8 +193,13 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	if task.UploadID != "" {
 		var parts []types.CompletedPart
 		for i := 1; i <= task.TotalChunks; i++ {
+			etag := strings.TrimSpace(task.PartETags[strconv.Itoa(i)])
+			if etag == "" {
+				return nil, fmt.Errorf("missing multipart etag for part %d", i)
+			}
 			parts = append(parts, types.CompletedPart{
-				PartNumber: intPtr(int32(i)),
+				PartNumber: aws.Int32(int32(i)),
+				ETag:       aws.String(etag),
 			})
 		}
 		if err := s.oss.CompleteMultipartUpload(ctx, task.StorageKey, task.UploadID, parts); err != nil {
@@ -238,10 +250,6 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 // ListTasks returns active upload tasks for a user.
 func (s *UploadService) ListTasks(ctx context.Context, userID uuid.UUID) ([]model.UploadTask, error) {
 	return s.repos.UploadTasks.ListByUser(ctx, userID)
-}
-
-func intPtr(i int32) *int32 {
-	return &i
 }
 
 func getMimeType(ext string) string {

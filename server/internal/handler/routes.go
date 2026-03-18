@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
@@ -19,7 +20,11 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 	r.GET("/api/auth/callback", handleCallback(svc))
 	r.GET("/api/shares/:code", handleAccessShare(svc))
 	r.GET("/api/system/forbidden-image", handleForbiddenImage())
+	// DogeCloud callback endpoint: support both GET and POST payload styles.
+	r.GET("/api/videos/callback", handleVideoCallback(svc))
 	r.POST("/api/videos/callback", handleVideoCallback(svc))
+	r.GET("/api/videos/callback/transcode", handleVideoCallback(svc))
+	r.POST("/api/videos/callback/transcode", handleVideoCallback(svc))
 
 	// Direct link proxy (public, but file must exist)
 	r.GET("/s/:user_id/:filename", handleDirectLink(svc))
@@ -77,6 +82,7 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 		videos.DELETE("/:id", handleDeleteVideo(svc))
 		videos.DELETE("/batch", handleBatchDeleteVideos(svc))
 		videos.GET("/:id/play", handleGetPlayURL(svc))
+		videos.GET("/:id/play-info", handleGetPlayInfo(svc))
 	}
 
 	// SSE
@@ -740,26 +746,106 @@ func handleGetPlayURL(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		playURL, err := svc.Video.GetPlayURL(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"play_url": playURL})
+		c.JSON(http.StatusOK, info)
+	}
+}
+
+func handleGetPlayInfo(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
+
+		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, info)
 	}
 }
 
 func handleVideoCallback(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		msg := c.Query("msg")
-		vid := c.Query("vid")
-		callback := c.Query("callback")
+		payload := service.VideoCallbackPayload{
+			Msg:          strings.TrimSpace(c.Query("msg")),
+			VID:          strings.TrimSpace(c.Query("vid")),
+			VCode:        strings.TrimSpace(c.Query("vcode")),
+			PlayerUserID: strings.TrimSpace(firstNonEmpty(c.Query("userId"), c.Query("userid"))),
+			Callback:     strings.TrimSpace(firstNonEmpty(c.Query("callbackString"), c.Query("callback"))),
+		}
 
-		if err := svc.Video.HandleCallback(c.Request.Context(), msg, vid, callback); err != nil {
+		if c.Request.Method == http.MethodPost {
+			_ = c.Request.ParseForm()
+			payload.Msg = strings.TrimSpace(firstNonEmpty(payload.Msg, c.PostForm("msg")))
+			payload.VID = strings.TrimSpace(firstNonEmpty(payload.VID, c.PostForm("vid")))
+			payload.VCode = strings.TrimSpace(firstNonEmpty(payload.VCode, c.PostForm("vcode")))
+			payload.PlayerUserID = strings.TrimSpace(firstNonEmpty(
+				payload.PlayerUserID,
+				c.PostForm("userId"),
+				c.PostForm("userid"),
+			))
+			payload.Callback = strings.TrimSpace(firstNonEmpty(
+				payload.Callback,
+				c.PostForm("callbackString"),
+				c.PostForm("callback"),
+			))
+
+			var body map[string]any
+			if err := c.ShouldBindJSON(&body); err == nil {
+				payload.Msg = strings.TrimSpace(firstNonEmpty(payload.Msg, asString(body["msg"])))
+				payload.VID = strings.TrimSpace(firstNonEmpty(payload.VID, asString(body["vid"])))
+				payload.VCode = strings.TrimSpace(firstNonEmpty(payload.VCode, asString(body["vcode"])))
+				payload.PlayerUserID = strings.TrimSpace(firstNonEmpty(
+					payload.PlayerUserID,
+					asString(body["userId"]),
+					asString(body["userid"]),
+				))
+				payload.Callback = strings.TrimSpace(firstNonEmpty(
+					payload.Callback,
+					asString(body["callbackString"]),
+					asString(body["callback"]),
+				))
+			}
+		}
+
+		if err := svc.Video.HandleCallback(c.Request.Context(), payload); err != nil {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.String(http.StatusOK, "DogeCloud Callback Success")
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func asString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strconv.FormatInt(int64(t), 10)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return ""
 	}
 }
 

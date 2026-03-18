@@ -7,8 +7,8 @@ Wants=postgresql.service
 Type=simple
 User=ideasaver
 Group=ideasaver
-WorkingDirectory=/opt/ideasaver
-ExecStart=/opt/ideasaver/ideasaver
+WorkingDirectory=/data/ideasaver
+ExecStart=/data/ideasaver/ideasaver
 EnvironmentFile=/etc/ideasaver/.env
 Restart=always
 RestartSec=5
@@ -22,7 +22,7 @@ SyslogIdentifier=ideasaver
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/ideasaver
+ReadWritePaths=/data/ideasaver
 PrivateTmp=yes
 
 # Resource limits
