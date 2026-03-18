@@ -119,6 +119,18 @@ curl -s https://i.dtmwiki.cn/api/auth/login | jq  # 验证 API 可达
 bash deploy/scripts/smoke_test.sh                  # 执行冒烟脚本
 ```
 
+## DogeCloud 配置探测（可选）
+
+如果你需要核对 DogeCloud 返回的临时三段式凭证、`VodUploadInfo`、以及接口返回中的 `endpoint/bucket`，可执行：
+
+```bash
+python3 deploy/scripts/doge_probe.py \
+  --access-id "<你的 AccessID>" \
+  --secret-key "<你的 Key>"
+```
+
+脚本会调用 `/auth/tmp_token.json`（`OSS_FULL` 与 `VOD_UPLOAD` 两种 channel）并打印完整返回与提取字段。
+
 ---
 
 ## 发布与回滚文档
