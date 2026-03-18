@@ -24,9 +24,9 @@
 进入 `canary`、`master` 的 PR 必须满足：
 
 - CI 全绿：
-  - `CI / backend (push)`
-  - `CI / frontend (push)`
-  - `Branch Policy / enforce-flow (pull_request)`
+  - `CI / backend`
+  - `CI / frontend`
+  - `Branch Policy / enforce-flow`
 - 至少 1 位审批通过
 - 所有 review comment 已解决
 
