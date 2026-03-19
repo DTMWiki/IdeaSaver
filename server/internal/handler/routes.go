@@ -3,6 +3,8 @@ package handler
 import (
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -106,14 +108,38 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 		admin.DELETE("/trash/cleanup", handleAdminCleanupTrash(svc))
 	}
 
+	indexPath := resolveFrontendIndexPath()
+
 	// Serve frontend static files in production
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/s/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		c.File("./web/dist/index.html")
+		c.File(indexPath)
 	})
+}
+
+func resolveFrontendIndexPath() string {
+	candidates := []string{
+		filepath.Join(".", "web", "dist", "index.html"),
+	}
+
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append([]string{
+			filepath.Join(exeDir, "web", "dist", "index.html"),
+			filepath.Join(exeDir, "..", "web", "dist", "index.html"),
+		}, candidates...)
+	}
+
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+
+	return filepath.Join(".", "web", "dist", "index.html")
 }
 
 // --- Auth Handlers ---

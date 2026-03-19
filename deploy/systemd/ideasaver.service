@@ -9,7 +9,7 @@ User=ideasaver
 Group=ideasaver
 WorkingDirectory=/data/ideasaver
 ExecStart=/data/ideasaver/ideasaver
-EnvironmentFile=/etc/ideasaver/.env
+EnvironmentFile=/data/ideasaver/.env
 Restart=always
 RestartSec=5
 

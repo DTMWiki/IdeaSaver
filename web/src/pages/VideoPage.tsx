@@ -70,17 +70,12 @@ function loadDogePlayerScript() {
 
         const existing = document.querySelector('script[data-doge-player-sdk="true"]') as HTMLScriptElement | null
         if (existing) {
-            const finish = () => waitForDogePlayer().then(resolve).catch(reject)
-            existing.addEventListener('load', finish, { once: true })
-            existing.addEventListener('error', () => reject(new Error('加载 DogePlayer 脚本失败')))
-            window.setTimeout(finish, 0)
-            return
+            existing.remove()
         }
 
         const script = document.createElement('script')
+        script.type = 'text/javascript'
         script.src = DOGE_PLAYER_SCRIPT
-        script.async = true
-        script.crossOrigin = 'anonymous'
         script.setAttribute('data-doge-player-sdk', 'true')
         script.onload = () => { waitForDogePlayer().then(resolve).catch(reject) }
         script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
