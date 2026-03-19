@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const defaultChunkSize = 5 * 1024 * 1024 // 5MB
@@ -141,7 +143,7 @@ func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userI
 		return s.repos.UploadTasks.UpdateMultipartPart(ctx, taskID, partNumber, etag, newChunks, newSize)
 	} else {
 		// Small file: single put
-		if err := s.oss.PutObject(ctx, task.StorageKey, body, "", size); err != nil {
+		if err := s.oss.PutObject(ctx, task.StorageKey, body, contentTypeForUploadTask(task.Filename), size); err != nil {
 			return fmt.Errorf("failed to upload: %w", err)
 		}
 
@@ -228,10 +230,22 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 		ModerationStatus: "normal",
 	}
 
-	if err := s.repos.Files.Create(ctx, file); err != nil {
+	if err := s.createFileWithRetry(ctx, file); err != nil {
 		_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
 		return nil, err
 	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "upload",
+		Resource:   "file",
+		ResourceID: &file.ID,
+		Details: map[string]any{
+			"file_name":   file.Name,
+			"storage_key": file.StorageKey,
+			"size":        file.Size,
+		},
+	})
 
 	// Update storage used
 	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, task.TotalSize)
@@ -249,6 +263,47 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	})
 
 	return file, nil
+}
+
+func (s *UploadService) createFileWithRetry(ctx context.Context, file *model.File) error {
+	if file == nil {
+		return fmt.Errorf("file is nil")
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			nextName, err := ensureUniqueFileName(ctx, s.repos.Files, file.UserID, file.ParentID, file.Name, nil)
+			if err != nil {
+				return err
+			}
+			file.Name = nextName
+		}
+
+		if err := s.repos.Files.Create(ctx, file); err != nil {
+			lastErr = err
+			if !isUniqueViolation(err) {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return sql.ErrNoRows
+}
+
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if pqErr, ok := err.(*pq.Error); ok {
+		return string(pqErr.Code) == "23505"
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate key")
 }
 
 // ListTasks returns active upload tasks for a user.
@@ -271,4 +326,12 @@ func getMimeType(ext string) string {
 		return mt
 	}
 	return "application/octet-stream"
+}
+
+func contentTypeForUploadTask(filename string) string {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(filename)))
+	if ext == "" {
+		return "application/octet-stream"
+	}
+	return getMimeType(ext)
 }
