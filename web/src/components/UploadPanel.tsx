@@ -11,6 +11,8 @@ import {
     DownOutlined,
     DeleteOutlined,
     CloudUploadOutlined,
+    VideoCameraOutlined,
+    FileOutlined,
 } from '@ant-design/icons'
 import { App } from 'antd'
 import { useUploadStore } from '@/stores/uploadStore'
@@ -77,21 +79,24 @@ export default function UploadPanel() {
                             <List.Item className="upload-task-item">
                                 <div className="upload-task-content">
                                     <div className="upload-task-row">
-                                        <Text className="upload-filename" ellipsis={{ tooltip: task.filename }}>
-                                            {task.filename}
-                                        </Text>
+                                        <Space size={6} style={{ minWidth: 0 }}>
+                                            {task.targetType === 'video' ? <VideoCameraOutlined /> : <FileOutlined />}
+                                            <Text className="upload-filename" ellipsis={{ tooltip: task.filename }}>
+                                                {task.filename}
+                                            </Text>
+                                        </Space>
                                         <Space size={4}>
                                             {task.status === 'uploading' && (
                                                 <Text type="secondary" style={{ fontSize: 12 }}>
                                                     {formatSpeed(task.speed)}
                                                 </Text>
                                             )}
-                                            {task.status === 'uploading' && (
+                                            {task.status === 'uploading' && task.targetType === 'file' && (
                                                 <Tooltip title="暂停">
                                                     <Button type="text" size="small" icon={<PauseCircleOutlined />} onClick={() => pauseTask(task.id)} />
                                                 </Tooltip>
                                             )}
-                                            {task.status === 'paused' && (
+                                            {task.status === 'paused' && task.targetType === 'file' && (
                                                 <Tooltip title="继续">
                                                     <Button type="text" size="small" icon={<PlayCircleOutlined />} onClick={() => resumeTask(task.id)} />
                                                 </Tooltip>
@@ -123,13 +128,27 @@ export default function UploadPanel() {
                                             </Tooltip>
                                         </Space>
                                     </div>
-                                    {(task.status === 'uploading' || task.status === 'paused') && (
+                                    {(task.status === 'uploading' || task.status === 'paused' || task.phase === 'processing' || task.phase === 'waiting_transcode') && (
                                         <Progress
                                             percent={task.progress}
                                             size="small"
                                             status={task.status === 'paused' ? 'exception' : 'active'}
                                             format={(p) => `${p}% · ${formatBytes(task.uploadedSize)} / ${formatBytes(task.totalSize)}`}
                                         />
+                                    )}
+                                    {(task.detail || task.vcode) && (
+                                        <Space direction="vertical" size={2} style={{ width: '100%', marginTop: 4 }}>
+                                            {task.detail && (
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    {task.detail}
+                                                </Text>
+                                            )}
+                                            {task.vcode && (
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    VCode: {task.vcode}
+                                                </Text>
+                                            )}
+                                        </Space>
                                     )}
                                 </div>
                             </List.Item>

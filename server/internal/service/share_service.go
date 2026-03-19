@@ -65,6 +65,19 @@ func (s *ShareService) CreateShare(ctx context.Context, userID uuid.UUID, req *C
 	if err := s.repos.Shares.Create(ctx, share); err != nil {
 		return nil, err
 	}
+	if s.repos.AuditLogs != nil {
+		_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+			UserID:   userID,
+			Action:   "share",
+			Resource: "share",
+			Details: map[string]any{
+				"file_id":    req.FileID.String(),
+				"share_id":   share.ID.String(),
+				"code":       share.Code,
+				"expires_at": share.ExpiresAt,
+			},
+		})
+	}
 
 	return share, nil
 }
@@ -115,7 +128,22 @@ func (s *ShareService) DeleteShare(ctx context.Context, id uuid.UUID, userID uui
 	if share.UserID != userID {
 		return fmt.Errorf("permission denied")
 	}
-	return s.repos.Shares.Delete(ctx, id)
+	if err := s.repos.Shares.Delete(ctx, id); err != nil {
+		return err
+	}
+	if s.repos.AuditLogs != nil {
+		_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+			UserID:     userID,
+			Action:     "share_delete",
+			Resource:   "share",
+			ResourceID: &share.ID,
+			Details: map[string]any{
+				"file_id": share.FileID.String(),
+				"code":    share.Code,
+			},
+		})
+	}
+	return nil
 }
 
 func generateShareCode() string {

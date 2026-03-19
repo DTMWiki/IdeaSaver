@@ -68,3 +68,15 @@ func TestPlaybackMessageForReadyWithoutPlayableSource(t *testing.T) {
 		t.Fatalf("playbackMessage() = %q", message)
 	}
 }
+
+func TestCanPlayVideoRequiresSDKMetadata(t *testing.T) {
+	t.Parallel()
+
+	if canPlayVideo(&model.Video{PlayURL: "https://example.com/raw.mp4"}) {
+		t.Fatalf("canPlayVideo() should reject direct-url-only playback")
+	}
+
+	if !canPlayVideo(&model.Video{VCode: "abc", PlayerUserID: "123"}) {
+		t.Fatalf("canPlayVideo() should accept vcode + sdk user id")
+	}
+}

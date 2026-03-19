@@ -76,6 +76,20 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 		return nil, err
 	}
 
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_upload",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":  video.Title,
+			"vid":    video.VID,
+			"vcode":  video.VCode,
+			"status": video.TranscodeStatus,
+			"size":   video.Size,
+		},
+	})
+
 	return video, nil
 }
 
@@ -94,7 +108,7 @@ func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallback
 	msg := strings.TrimSpace(payload.Msg)
 
 	video.VCode = firstNonEmptyTrim(payload.VCode, video.VCode)
-	video.PlayerUserID = firstNonEmptyTrim(payload.PlayerUserID, video.PlayerUserID, s.cfg.DogeUserID)
+	video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, payload.PlayerUserID, video.PlayerUserID)
 	video.TranscodeStatus, video.TranscodeMessage = callbackState(msg, video.TranscodeStatus)
 
 	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "")
@@ -193,7 +207,23 @@ func (s *VideoService) SetVideoStatus(ctx context.Context, id uuid.UUID, userID 
 		return fmt.Errorf("failed to update status on DogeCloud: %w", err)
 	}
 
-	return s.repos.Videos.UpdateStatus(ctx, id, status)
+	if err := s.repos.Videos.UpdateStatus(ctx, id, status); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_status_change",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":  video.Title,
+			"vid":    video.VID,
+			"status": status,
+		},
+	})
+
+	return nil
 }
 
 // DeleteVideo deletes a single video.
@@ -208,12 +238,28 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 
 	_ = s.vcloud.DeleteVideos([]string{video.VID})
 
-	return s.repos.Videos.Delete(ctx, id)
+	if err := s.repos.Videos.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_delete",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title": video.Title,
+			"vid":   video.VID,
+		},
+	})
+
+	return nil
 }
 
 // BatchDeleteVideos deletes multiple videos.
 func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, userID uuid.UUID) error {
 	var vids []string
+	var deleted []map[string]any
 	for _, id := range ids {
 		video, err := s.repos.Videos.FindByID(ctx, id)
 		if err != nil {
@@ -223,13 +269,32 @@ func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, u
 			return fmt.Errorf("permission denied for video %s", id)
 		}
 		vids = append(vids, video.VID)
+		deleted = append(deleted, map[string]any{
+			"id":    video.ID.String(),
+			"title": video.Title,
+			"vid":   video.VID,
+		})
 	}
 
 	if len(vids) > 0 {
 		_ = s.vcloud.DeleteVideos(vids)
 	}
 
-	return s.repos.Videos.BatchDelete(ctx, ids)
+	if err := s.repos.Videos.BatchDelete(ctx, ids); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:   userID,
+		Action:   "video_delete",
+		Resource: "video",
+		Details: map[string]any{
+			"count":  len(deleted),
+			"videos": deleted,
+		},
+	})
+
+	return nil
 }
 
 func (s *VideoService) GetPlayInfo(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*VideoPlayInfo, error) {
@@ -266,6 +331,9 @@ func (s *VideoService) GetPlayURL(ctx context.Context, id uuid.UUID, userID uuid
 	if err != nil {
 		return "", err
 	}
+	if !info.Ready {
+		return "", fmt.Errorf(firstNonEmptyTrim(info.Message, "播放地址尚未就绪"))
+	}
 	if strings.TrimSpace(info.PlayURL) == "" {
 		return "", fmt.Errorf("播放地址尚未就绪")
 	}
@@ -279,7 +347,7 @@ func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Vid
 
 	if info, err := s.vcloud.GetVideoInfo(video.VID); err == nil && info != nil {
 		video.VCode = firstNonEmptyTrim(info.VCode, video.VCode)
-		video.PlayerUserID = firstNonEmptyTrim(info.PlayerUserID, video.PlayerUserID)
+		video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, info.PlayerUserID, video.PlayerUserID)
 		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
 		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
 		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
@@ -291,7 +359,7 @@ func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Vid
 			video.PlayURL = firstNonEmptyTrim(playURL, video.PlayURL)
 		}
 	}
-	video.PlayerUserID = firstNonEmptyTrim(video.PlayerUserID, playerUserIDFromURL(video.PlayURL), s.cfg.DogeUserID)
+	video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, video.PlayerUserID, playerUserIDFromURL(video.PlayURL))
 
 	if strings.TrimSpace(video.PlayURL) == "" && strings.TrimSpace(video.VCode) != "" && strings.TrimSpace(video.PlayerUserID) != "" {
 		video.PlayURL = firstNonEmptyTrim(video.PlayURL, s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID))
@@ -324,9 +392,6 @@ func shouldRefreshVideoMeta(video *model.Video) bool {
 func canPlayVideo(video *model.Video) bool {
 	if video == nil {
 		return false
-	}
-	if strings.TrimSpace(video.PlayURL) != "" {
-		return true
 	}
 	return strings.TrimSpace(video.VCode) != "" && strings.TrimSpace(video.PlayerUserID) != ""
 }

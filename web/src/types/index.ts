@@ -120,6 +120,7 @@ export interface UploadFileTask {
     taskId?: string // server-assigned task ID
     file: File
     parentId: string | null
+    targetType: 'file' | 'video'
     filename: string
     totalSize: number
     uploadedSize: number
@@ -129,7 +130,11 @@ export interface UploadFileTask {
     status: 'pending' | 'uploading' | 'paused' | 'completed' | 'failed'
     progress: number // 0-100
     speed: number // bytes per second
+    phase?: 'uploading' | 'processing' | 'waiting_transcode'
+    detail?: string
     url?: string
     markdown?: string
+    videoId?: string
+    vcode?: string
     error?: string
 }
