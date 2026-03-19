@@ -26,9 +26,20 @@ export default function SSEProvider({ children }: SSEProviderProps) {
             if (eventSourceRef.current) {
                 eventSourceRef.current.close()
             }
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
 
             const es = new EventSource(`/api/events?token=${token}`)
             eventSourceRef.current = es
+
+            es.onopen = () => {
+                if (reconnectTimerRef.current) {
+                    clearTimeout(reconnectTimerRef.current)
+                    reconnectTimerRef.current = null
+                }
+            }
 
             es.addEventListener('upload_complete', (e) => {
                 try {
@@ -74,8 +85,14 @@ export default function SSEProvider({ children }: SSEProviderProps) {
             })
 
             es.onerror = () => {
+                if (eventSourceRef.current !== es) {
+                    return
+                }
                 es.close()
                 // Reconnect after 5 seconds
+                if (reconnectTimerRef.current) {
+                    clearTimeout(reconnectTimerRef.current)
+                }
                 reconnectTimerRef.current = setTimeout(connect, 5000)
             }
         }

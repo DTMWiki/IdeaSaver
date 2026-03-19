@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag } from 'antd'
 import {
     UploadOutlined,
@@ -62,7 +62,7 @@ function waitForDogePlayer(timeoutMs = 5000) {
 function loadDogePlayerScript() {
     if (dogePlayerLoader) return dogePlayerLoader
 
-    dogePlayerLoader = new Promise((resolve, reject) => {
+    const loaderPromise = new Promise<void>((resolve, reject) => {
         if (resolveDogePlayer()) {
             resolve()
             return
@@ -80,8 +80,12 @@ function loadDogePlayerScript() {
         script.onload = () => { waitForDogePlayer().then(resolve).catch(reject) }
         script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
         document.head.appendChild(script)
+    }).catch((error) => {
+        dogePlayerLoader = null
+        throw error
     })
 
+    dogePlayerLoader = loaderPromise
     return dogePlayerLoader
 }
 
@@ -89,7 +93,8 @@ export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
     const addVideoFiles = useUploadStore((state) => state.addVideoFiles)
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const playerContainerRef = useRef<HTMLDivElement>(null)
+    const playerContainerRef = useRef<HTMLDivElement | null>(null)
+    const [playerContainerTick, setPlayerContainerTick] = useState(0)
     const { message, modal } = App.useApp()
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [playInfo, setPlayInfo] = useState<VideoPlayInfo | null>(null)
@@ -111,6 +116,11 @@ export default function VideoPage() {
         return null
     }, [playInfo])
 
+    const attachPlayerContainer = useCallback((node: HTMLDivElement | null) => {
+        playerContainerRef.current = node
+        setPlayerContainerTick((value) => value + 1)
+    }, [])
+
     useEffect(() => { fetchVideos(1) }, [fetchVideos])
 
     useEffect(() => {
@@ -123,6 +133,10 @@ export default function VideoPage() {
         )
         const sdkUserIDNum = Number(sdkUserID)
         const playerContainer = playerContainerRef.current
+
+        if (!playerContainer) {
+            return
+        }
 
         if (sdkRequirementError || !vcode || !sdkUserID || Number.isNaN(sdkUserIDNum) || sdkUserIDNum <= 0) {
             return
@@ -140,8 +154,8 @@ export default function VideoPage() {
                 if (disposed) return
 
                 const DogePlayer = resolveDogePlayer()
-                if (!DogePlayer || !playerContainer) {
-                    setSdkError('DogePlayer SDK 未成功注入，请检查 player.dogecloud.com 的网络连通性')
+                if (!DogePlayer) {
+                    setSdkError('DogePlayer SDK 未成功注入，请稍后重试或检查 player.dogecloud.com 连通性')
                     setSdkLoading(false)
                     return
                 }
@@ -176,7 +190,7 @@ export default function VideoPage() {
                 playerContainer.innerHTML = ''
             }
         }
-    }, [playInfo, sdkRequirementError])
+    }, [playInfo, playerContainerTick, sdkRequirementError])
 
     const handleUpload = () => fileInputRef.current?.click()
 
@@ -370,7 +384,7 @@ export default function VideoPage() {
                         ) : (
                             <div style={{ position: 'relative' }}>
                                 <div
-                                    ref={playerContainerRef}
+                                    ref={attachPlayerContainer}
                                     style={{ width: '100%', minHeight: 420, background: '#000' }}
                                 />
                                 {sdkLoading && (

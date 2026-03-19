@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
@@ -939,11 +940,19 @@ func handleSSE(svc *service.Services) gin.HandlerFunc {
 		defer svc.SSE.Unregister(client.ID)
 
 		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
+		c.Header("Cache-Control", "no-cache, no-transform")
 		c.Header("Connection", "keep-alive")
 		c.Header("X-Accel-Buffering", "no") // Disable Nginx buffering for SSE
+		c.Status(http.StatusOK)
+		c.Writer.WriteHeaderNow()
 
+		if _, err := c.Writer.WriteString("retry: 5000\n: connected\n\n"); err != nil {
+			return
+		}
 		c.Writer.Flush()
+
+		heartbeat := time.NewTicker(25 * time.Second)
+		defer heartbeat.Stop()
 
 		for {
 			select {
@@ -951,7 +960,14 @@ func handleSSE(svc *service.Services) gin.HandlerFunc {
 				if !ok {
 					return
 				}
-				c.Writer.WriteString(service.FormatSSE(event))
+				if _, err := c.Writer.WriteString(service.FormatSSE(event)); err != nil {
+					return
+				}
+				c.Writer.Flush()
+			case <-heartbeat.C:
+				if _, err := c.Writer.WriteString(": ping\n\n"); err != nil {
+					return
+				}
 				c.Writer.Flush()
 			case <-c.Request.Context().Done():
 				return
