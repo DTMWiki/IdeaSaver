@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Typography, Empty, Popconfirm, App, Pagination, Tag } from 'antd'
+import { Table, Button, Typography, Empty, Popconfirm, App, Pagination, Tag, Space } from 'antd'
 import { DeleteOutlined } from '@ant-design/icons'
 import type { Video } from '@/types'
 import { listAllVideos, adminDeleteVideo } from '@/api/admin'
@@ -69,10 +69,14 @@ export default function AdminVideos() {
         },
         {
             title: '状态',
-            dataIndex: 'status',
             key: 'status',
-            width: 80,
-            render: (s: number) => s === 1 ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>,
+            width: 150,
+            render: (_: unknown, record: Video) => (
+                <Space size={6} wrap>
+                    {record.status === 1 ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>}
+                    {renderTranscodeTag(record.transcode_status)}
+                </Space>
+            ),
         },
         {
             title: '大小',
@@ -113,4 +117,19 @@ export default function AdminVideos() {
             )}
         </div>
     )
+}
+
+function renderTranscodeTag(status: Video['transcode_status']) {
+    switch (status) {
+    case 'ready':
+        return <Tag color="green">可播放</Tag>
+    case 'failed':
+        return <Tag color="red">转码失败</Tag>
+    case 'blocked':
+        return <Tag color="volcano">已屏蔽</Tag>
+    case 'processing':
+        return <Tag color="blue">转码中</Tag>
+    default:
+        return <Tag>排队中</Tag>
+    }
 }

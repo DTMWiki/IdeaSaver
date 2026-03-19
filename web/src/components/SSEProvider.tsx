@@ -2,6 +2,8 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { App } from 'antd'
 import { useAuthStore } from '@/stores/authStore'
 import { useFileStore } from '@/stores/fileStore'
+import { useVideoStore } from '@/stores/videoStore'
+import { useUploadStore } from '@/stores/uploadStore'
 
 interface SSEProviderProps {
     children: ReactNode
@@ -10,6 +12,8 @@ interface SSEProviderProps {
 export default function SSEProvider({ children }: SSEProviderProps) {
     const { token } = useAuthStore()
     const { refresh } = useFileStore()
+    const refreshVideos = useVideoStore((state) => state.fetchVideos)
+    const syncVideoTask = useUploadStore((state) => state.syncVideoTask)
     const { notification } = App.useApp()
     const eventSourceRef = useRef<EventSource | null>(null)
     const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -43,14 +47,30 @@ export default function SSEProvider({ children }: SSEProviderProps) {
             es.addEventListener('video_transcode_complete', (e) => {
                 try {
                     const data = JSON.parse(e.data)
+                    syncVideoTask(data.video_id, data.transcode_status, data.transcode_message, data.vcode)
                     notification.success({
                         message: '视频转码完成',
                         description: `视频 "${data.title || '未知'}" 转码完成`,
                         duration: 5,
                     })
+                    refreshVideos().catch(() => { })
                 } catch {
                     // ignore
                 }
+            })
+
+            es.addEventListener('video_upload_complete', () => {
+                refreshVideos().catch(() => { })
+            })
+
+            es.addEventListener('video_status_update', (e) => {
+                try {
+                    const data = JSON.parse(e.data)
+                    syncVideoTask(data.video_id, data.transcode_status, data.transcode_message, data.vcode)
+                } catch {
+                    // ignore
+                }
+                refreshVideos().catch(() => { })
             })
 
             es.onerror = () => {
@@ -70,7 +90,7 @@ export default function SSEProvider({ children }: SSEProviderProps) {
                 clearTimeout(reconnectTimerRef.current)
             }
         }
-    }, [token, notification, refresh])
+    }, [token, notification, refresh, refreshVideos, syncVideoTask])
 
     return <>{children}</>
 }

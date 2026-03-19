@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Table, Typography, Empty, Select, Pagination, Tag, Space } from 'antd'
 import type { AuditLog } from '@/types'
 import { listLogs } from '@/api/admin'
@@ -10,14 +10,19 @@ const ACTION_OPTIONS = [
     { label: '全部', value: '' },
     { label: '登录', value: 'login' },
     { label: '上传', value: 'upload' },
+    { label: '新建文件夹', value: 'create_directory' },
     { label: '删除', value: 'delete' },
+    { label: '彻底删除', value: 'permanent_delete' },
     { label: '重命名', value: 'rename' },
     { label: '移动', value: 'move' },
     { label: '复制', value: 'copy' },
     { label: '分享', value: 'share' },
+    { label: '取消分享', value: 'share_delete' },
     { label: '恢复', value: 'restore' },
     { label: '视频上传', value: 'video_upload' },
     { label: '视频删除', value: 'video_delete' },
+    { label: '视频状态变更', value: 'video_status_change' },
+    { label: '管理员删文件', value: 'admin_file_deleted' },
     { label: '文件封禁', value: 'file_banned' },
     { label: '文件解封', value: 'file_unbanned' },
     { label: '提交申诉', value: 'file_appeal_submitted' },
@@ -28,14 +33,19 @@ const ACTION_OPTIONS = [
 const ACTION_COLORS: Record<string, string> = {
     login: 'blue',
     upload: 'green',
+    create_directory: 'cyan',
     delete: 'red',
+    permanent_delete: 'volcano',
     rename: 'orange',
     move: 'purple',
     copy: 'cyan',
     share: 'magenta',
+    share_delete: 'red',
     restore: 'lime',
     video_upload: 'geekblue',
     video_delete: 'volcano',
+    video_status_change: 'gold',
+    admin_file_deleted: 'volcano',
     file_banned: 'red',
     file_unbanned: 'green',
     file_appeal_submitted: 'orange',
@@ -51,7 +61,7 @@ export default function AdminLogs() {
     const [actionFilter, setActionFilter] = useState('')
     const pageSize = 50
 
-    const fetchLogs = async (p: number, action?: string) => {
+    const fetchLogs = useCallback(async (p: number, action?: string) => {
         setLoading(true)
         try {
             const a = action !== undefined ? action : actionFilter
@@ -62,9 +72,9 @@ export default function AdminLogs() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [actionFilter])
 
-    useEffect(() => { fetchLogs(1) }, [])
+    useEffect(() => { void fetchLogs(1) }, [fetchLogs])
 
     const handleFilterChange = (action: string) => {
         setActionFilter(action)

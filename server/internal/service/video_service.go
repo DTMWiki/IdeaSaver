@@ -14,6 +14,14 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	videoTranscodePending    = "pending"
+	videoTranscodeProcessing = "processing"
+	videoTranscodeReady      = "ready"
+	videoTranscodeFailed     = "failed"
+	videoTranscodeBlocked    = "blocked"
+)
+
 // VideoService handles video management business logic.
 type VideoService struct {
 	cfg    *config.Config
@@ -31,11 +39,12 @@ type VideoCallbackPayload struct {
 }
 
 type VideoPlayInfo struct {
-	Ready        bool   `json:"ready"`
-	PlayURL      string `json:"play_url,omitempty"`
-	VCode        string `json:"vcode,omitempty"`
-	PlayerUserID string `json:"player_user_id,omitempty"`
-	Message      string `json:"message,omitempty"`
+	Ready           bool   `json:"ready"`
+	PlayURL         string `json:"play_url,omitempty"`
+	VCode           string `json:"vcode,omitempty"`
+	PlayerUserID    string `json:"player_user_id,omitempty"`
+	TranscodeStatus string `json:"transcode_status"`
+	Message         string `json:"message,omitempty"`
 }
 
 func NewVideoService(cfg *config.Config, repos *repository.Repositories, vcloud *storage.VCloudClient, sse *SSEService) *VideoService {
@@ -52,29 +61,34 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 	}
 
 	video := &model.Video{
-		UserID: userID,
-		Title:  title,
-		VID:    vid,
-		Status: 1, // enabled by default
-		Size:   size,
+		UserID:           userID,
+		Title:            title,
+		VID:              vid,
+		TranscodeStatus:  videoTranscodeProcessing,
+		TranscodeMessage: "视频上传完成，等待转码",
+		Status:           1, // enabled by default
+		Size:             size,
 	}
 
-	// Best-effort preload: fetch vcode/userId and possibly play URL immediately.
-	if info, err := s.vcloud.GetVideoInfo(vid); err == nil && info != nil {
-		video.VCode = firstNonEmptyTrim(info.VCode, video.VCode)
-		video.PlayerUserID = firstNonEmptyTrim(info.PlayerUserID, video.PlayerUserID)
-		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
-		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
-		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
-	}
-	video.PlayerUserID = firstNonEmptyTrim(video.PlayerUserID, playerUserIDFromURL(video.PlayURL), s.cfg.DogeUserID)
-	if strings.TrimSpace(video.PlayURL) == "" {
-		video.PlayURL = s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID)
-	}
+	video, _ = s.refreshPlaybackMeta(ctx, video, "", "")
 
 	if err := s.repos.Videos.Create(ctx, video); err != nil {
 		return nil, err
 	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_upload",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":  video.Title,
+			"vid":    video.VID,
+			"vcode":  video.VCode,
+			"status": video.TranscodeStatus,
+			"size":   video.Size,
+		},
+	})
 
 	return video, nil
 }
@@ -93,12 +107,15 @@ func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallback
 
 	msg := strings.TrimSpace(payload.Msg)
 
-	// Callback may carry vcode / userId.
 	video.VCode = firstNonEmptyTrim(payload.VCode, video.VCode)
-	video.PlayerUserID = firstNonEmptyTrim(payload.PlayerUserID, video.PlayerUserID, s.cfg.DogeUserID)
-	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "")
+	video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, payload.PlayerUserID, video.PlayerUserID)
+	video.TranscodeStatus, video.TranscodeMessage = callbackState(msg, video.TranscodeStatus)
 
-	video, _ = s.refreshPlaybackMeta(ctx, video)
+	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "")
+	_ = s.repos.Videos.UpdateTranscodeState(ctx, video.VID, video.TranscodeStatus, video.TranscodeMessage)
+
+	video, _ = s.refreshPlaybackMeta(ctx, video, "", "")
+	_ = s.repos.Videos.UpdateTranscodeState(ctx, video.VID, video.TranscodeStatus, video.TranscodeMessage)
 
 	eventType := "video_status_update"
 	switch msg {
@@ -111,28 +128,36 @@ func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallback
 	case "blocked":
 		eventType = "video_blocked"
 	}
+
 	s.sse.SendToUser(video.UserID, SSEEvent{
 		Type: eventType,
 		Data: map[string]any{
-			"video_id":        video.ID,
-			"title":           video.Title,
-			"play_url":        video.PlayURL,
-			"vcode":           video.VCode,
-			"player_user_id":  video.PlayerUserID,
-			"callback_msg":    msg,
-			"callback_string": strings.TrimSpace(payload.Callback),
+			"video_id":          video.ID,
+			"title":             video.Title,
+			"play_url":          video.PlayURL,
+			"vcode":             video.VCode,
+			"player_user_id":    video.PlayerUserID,
+			"thumbnail_url":     video.ThumbnailURL,
+			"thumbnail_small":   video.ThumbnailSmallURL,
+			"transcode_status":  video.TranscodeStatus,
+			"transcode_message": video.TranscodeMessage,
+			"callback_msg":      msg,
+			"callback_string":   strings.TrimSpace(payload.Callback),
 		},
 	})
 	if msg == "transcode" {
-		// Backward compatibility for old listeners.
 		s.sse.SendToUser(video.UserID, SSEEvent{
 			Type: "video_ready",
 			Data: map[string]any{
-				"video_id":       video.ID,
-				"title":          video.Title,
-				"play_url":       video.PlayURL,
-				"vcode":          video.VCode,
-				"player_user_id": video.PlayerUserID,
+				"video_id":          video.ID,
+				"title":             video.Title,
+				"play_url":          video.PlayURL,
+				"vcode":             video.VCode,
+				"player_user_id":    video.PlayerUserID,
+				"thumbnail_url":     video.ThumbnailURL,
+				"thumbnail_small":   video.ThumbnailSmallURL,
+				"transcode_status":  video.TranscodeStatus,
+				"transcode_message": video.TranscodeMessage,
 			},
 		})
 	}
@@ -142,7 +167,26 @@ func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallback
 
 // ListVideos returns the user's videos.
 func (s *VideoService) ListVideos(ctx context.Context, userID uuid.UUID, offset, limit int) ([]model.Video, int, error) {
-	return s.repos.Videos.ListByUser(ctx, userID, offset, limit)
+	videos, total, err := s.repos.Videos.ListByUser(ctx, userID, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	refreshed := 0
+	for i := range videos {
+		if !shouldRefreshVideoMeta(&videos[i]) {
+			continue
+		}
+		if refreshed >= 6 {
+			break
+		}
+		if updated, err := s.refreshPlaybackMeta(ctx, &videos[i], "", ""); err == nil && updated != nil {
+			videos[i] = *updated
+		}
+		refreshed++
+	}
+
+	return videos, total, nil
 }
 
 // SetVideoStatus enables or disables a video.
@@ -155,7 +199,6 @@ func (s *VideoService) SetVideoStatus(ctx context.Context, id uuid.UUID, userID 
 		return fmt.Errorf("permission denied")
 	}
 
-	// Sync status to DogeCloud
 	dogeStatus := 0
 	if status == 1 {
 		dogeStatus = 1
@@ -164,7 +207,23 @@ func (s *VideoService) SetVideoStatus(ctx context.Context, id uuid.UUID, userID 
 		return fmt.Errorf("failed to update status on DogeCloud: %w", err)
 	}
 
-	return s.repos.Videos.UpdateStatus(ctx, id, status)
+	if err := s.repos.Videos.UpdateStatus(ctx, id, status); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_status_change",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":  video.Title,
+			"vid":    video.VID,
+			"status": status,
+		},
+	})
+
+	return nil
 }
 
 // DeleteVideo deletes a single video.
@@ -177,15 +236,30 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 		return fmt.Errorf("permission denied")
 	}
 
-	// Delete from DogeCloud
 	_ = s.vcloud.DeleteVideos([]string{video.VID})
 
-	return s.repos.Videos.Delete(ctx, id)
+	if err := s.repos.Videos.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_delete",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title": video.Title,
+			"vid":   video.VID,
+		},
+	})
+
+	return nil
 }
 
 // BatchDeleteVideos deletes multiple videos.
 func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, userID uuid.UUID) error {
 	var vids []string
+	var deleted []map[string]any
 	for _, id := range ids {
 		video, err := s.repos.Videos.FindByID(ctx, id)
 		if err != nil {
@@ -195,16 +269,39 @@ func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, u
 			return fmt.Errorf("permission denied for video %s", id)
 		}
 		vids = append(vids, video.VID)
+		deleted = append(deleted, map[string]any{
+			"id":    video.ID.String(),
+			"title": video.Title,
+			"vid":   video.VID,
+		})
 	}
 
 	if len(vids) > 0 {
 		_ = s.vcloud.DeleteVideos(vids)
 	}
 
-	return s.repos.Videos.BatchDelete(ctx, ids)
+	if err := s.repos.Videos.BatchDelete(ctx, ids); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:   userID,
+		Action:   "video_delete",
+		Resource: "video",
+		Details: map[string]any{
+			"count":  len(deleted),
+			"videos": deleted,
+		},
+	})
+
+	return nil
 }
 
 func (s *VideoService) GetPlayInfo(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*VideoPlayInfo, error) {
+	return s.GetPlayInfoForViewer(ctx, id, userID, "", "")
+}
+
+func (s *VideoService) GetPlayInfoForViewer(ctx context.Context, id uuid.UUID, userID uuid.UUID, viewerIP, userAgent string) (*VideoPlayInfo, error) {
 	video, err := s.repos.Videos.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -213,16 +310,17 @@ func (s *VideoService) GetPlayInfo(ctx context.Context, id uuid.UUID, userID uui
 		return nil, fmt.Errorf("permission denied")
 	}
 
-	video, _ = s.refreshPlaybackMeta(ctx, video)
+	video, _ = s.refreshPlaybackMeta(ctx, video, viewerIP, userAgent)
 
 	info := &VideoPlayInfo{
-		Ready:        strings.TrimSpace(video.PlayURL) != "",
-		PlayURL:      strings.TrimSpace(video.PlayURL),
-		VCode:        strings.TrimSpace(video.VCode),
-		PlayerUserID: strings.TrimSpace(video.PlayerUserID),
+		PlayURL:         strings.TrimSpace(video.PlayURL),
+		VCode:           strings.TrimSpace(video.VCode),
+		PlayerUserID:    strings.TrimSpace(video.PlayerUserID),
+		TranscodeStatus: normalizeTranscodeStatus(video.TranscodeStatus),
 	}
+	info.Ready = info.TranscodeStatus == videoTranscodeReady && canPlayVideo(video)
 	if !info.Ready {
-		info.Message = "视频仍在转码处理中，请稍后重试"
+		info.Message = playbackMessage(video)
 	}
 	return info, nil
 }
@@ -233,43 +331,138 @@ func (s *VideoService) GetPlayURL(ctx context.Context, id uuid.UUID, userID uuid
 	if err != nil {
 		return "", err
 	}
+	if !info.Ready {
+		return "", fmt.Errorf(firstNonEmptyTrim(info.Message, "播放地址尚未就绪"))
+	}
 	if strings.TrimSpace(info.PlayURL) == "" {
 		return "", fmt.Errorf("播放地址尚未就绪")
 	}
 	return info.PlayURL, nil
 }
 
-func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Video) (*model.Video, error) {
+func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Video, viewerIP, userAgent string) (*model.Video, error) {
 	if video == nil {
 		return nil, fmt.Errorf("nil video")
 	}
 
-	// 1) Pull metadata by VID.
 	if info, err := s.vcloud.GetVideoInfo(video.VID); err == nil && info != nil {
 		video.VCode = firstNonEmptyTrim(info.VCode, video.VCode)
-		video.PlayerUserID = firstNonEmptyTrim(info.PlayerUserID, video.PlayerUserID)
+		video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, info.PlayerUserID, video.PlayerUserID)
 		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
 		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
 		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
+		video.TranscodeStatus = mergeVideoStatus(video.TranscodeStatus, info.Status)
 	}
 
-	// 2) Try streams API by vcode for direct play URL.
-	if strings.TrimSpace(video.PlayURL) == "" && strings.TrimSpace(video.VCode) != "" {
-		if playURL, err := s.vcloud.GetBestPlayURL(video.VCode); err == nil {
+	if strings.TrimSpace(viewerIP) != "" && strings.TrimSpace(video.VCode) != "" {
+		if playURL, err := s.vcloud.GetBestPlayURL(video.VCode, viewerIP, userAgent); err == nil {
 			video.PlayURL = firstNonEmptyTrim(playURL, video.PlayURL)
 		}
 	}
-	video.PlayerUserID = firstNonEmptyTrim(video.PlayerUserID, playerUserIDFromURL(video.PlayURL), s.cfg.DogeUserID)
+	video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, video.PlayerUserID, playerUserIDFromURL(video.PlayURL))
 
-	// 3) Fallback player mp4 endpoint (vcode + userId).
-	if strings.TrimSpace(video.PlayURL) == "" {
+	if strings.TrimSpace(video.PlayURL) == "" && strings.TrimSpace(video.VCode) != "" && strings.TrimSpace(video.PlayerUserID) != "" {
 		video.PlayURL = firstNonEmptyTrim(video.PlayURL, s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID))
 	}
 
 	if err := s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, video.PlayURL, video.ThumbnailURL, video.ThumbnailSmallURL); err != nil {
 		return nil, err
 	}
+	if err := s.repos.Videos.UpdateTranscodeState(ctx, video.VID, normalizeTranscodeStatus(video.TranscodeStatus), strings.TrimSpace(video.TranscodeMessage)); err != nil {
+		return nil, err
+	}
+
 	return video, nil
+}
+
+func shouldRefreshVideoMeta(video *model.Video) bool {
+	if video == nil {
+		return false
+	}
+	if strings.TrimSpace(video.ThumbnailSmallURL) == "" || strings.TrimSpace(video.ThumbnailURL) == "" {
+		return true
+	}
+	if strings.TrimSpace(video.VCode) == "" || strings.TrimSpace(video.PlayerUserID) == "" {
+		return true
+	}
+	status := normalizeTranscodeStatus(video.TranscodeStatus)
+	return status == videoTranscodePending || status == videoTranscodeProcessing
+}
+
+func canPlayVideo(video *model.Video) bool {
+	if video == nil {
+		return false
+	}
+	return strings.TrimSpace(video.VCode) != "" && strings.TrimSpace(video.PlayerUserID) != ""
+}
+
+func callbackState(msg, current string) (string, string) {
+	switch strings.TrimSpace(msg) {
+	case "upload":
+		return videoTranscodeProcessing, "视频上传完成，等待转码"
+	case "transcode":
+		return videoTranscodeReady, "视频转码完成，可开始播放"
+	case "transcode_failed":
+		return videoTranscodeFailed, "视频转码失败"
+	case "blocked":
+		return videoTranscodeBlocked, "视频因审核或策略原因暂不可播放"
+	default:
+		if normalized := normalizeTranscodeStatus(current); normalized != "" {
+			return normalized, playbackMessage(&model.Video{TranscodeStatus: normalized})
+		}
+		return videoTranscodeProcessing, "视频状态同步中"
+	}
+}
+
+func normalizeTranscodeStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case videoTranscodeReady, videoTranscodeFailed, videoTranscodeBlocked, videoTranscodeProcessing:
+		return strings.TrimSpace(status)
+	case "", videoTranscodePending:
+		return videoTranscodePending
+	default:
+		return videoTranscodePending
+	}
+}
+
+func mergeVideoStatus(current string, dogeStatus int) string {
+	switch dogeStatus {
+	case 20:
+		return videoTranscodeFailed
+	case 21, 40:
+		return videoTranscodeBlocked
+	case 30, 31:
+		if normalizeTranscodeStatus(current) == videoTranscodeReady {
+			return videoTranscodeReady
+		}
+		return videoTranscodeProcessing
+	case 10:
+		return normalizeTranscodeStatus(current)
+	default:
+		return normalizeTranscodeStatus(current)
+	}
+}
+
+func playbackMessage(video *model.Video) string {
+	if video == nil {
+		return "视频状态未知，请稍后重试"
+	}
+
+	switch normalizeTranscodeStatus(video.TranscodeStatus) {
+	case videoTranscodeReady:
+		if !canPlayVideo(video) {
+			return "已收到转码成功回调，正在同步播放信息"
+		}
+		return firstNonEmptyTrim(video.TranscodeMessage, "视频已就绪")
+	case videoTranscodeFailed:
+		return firstNonEmptyTrim(video.TranscodeMessage, "视频转码失败，请重新上传或联系管理员")
+	case videoTranscodeBlocked:
+		return firstNonEmptyTrim(video.TranscodeMessage, "视频已被屏蔽，暂不可播放")
+	case videoTranscodeProcessing, videoTranscodePending:
+		return firstNonEmptyTrim(video.TranscodeMessage, "视频转码中，请稍后重试")
+	default:
+		return "视频状态同步中，请稍后重试"
+	}
 }
 
 func firstNonEmptyTrim(values ...string) string {

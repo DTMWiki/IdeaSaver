@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag } from 'antd'
 import {
     UploadOutlined,
     PlayCircleOutlined,
@@ -7,138 +7,209 @@ import {
 } from '@ant-design/icons'
 import { useVideoStore } from '@/stores/videoStore'
 import { getPlayInfo, type VideoPlayInfo } from '@/api/videos'
+import { useUploadStore } from '@/stores/uploadStore'
 import { formatBytes, formatDate } from '@/utils/format'
 import VideoThumbnail from '@/components/VideoThumbnail'
+import type { Video } from '@/types'
 
 const { Title, Text } = Typography
 
-const DOGE_PLAYER_SCRIPT = '/vendor/dogeplayer-loader.js'
+const DOGE_PLAYER_SCRIPT = 'https://player.dogecloud.com/js/loader'
 let dogePlayerLoader: Promise<void> | null = null
 
-function loadDogePlayerScript() {
-    if (dogePlayerLoader) return dogePlayerLoader
-    dogePlayerLoader = new Promise((resolve, reject) => {
-        const existing = document.querySelector(`script[src="${DOGE_PLAYER_SCRIPT}"]`) as HTMLScriptElement | null
-        if (existing) {
-            if ((window as any).DogePlayer || (window as any).DogeCloudPlayer) {
+type DogePlayerOptions = {
+    container: HTMLDivElement
+    vcode: string
+    userId: number
+    autoPlay?: boolean
+}
+
+type DogePlayerInstance = {
+    destroy?: () => void
+}
+
+type DogePlayerConstructor = new (options: DogePlayerOptions) => DogePlayerInstance
+
+type DogePlayerWindow = Window & {
+    DogePlayer?: DogePlayerConstructor
+    DogeCloudPlayer?: DogePlayerConstructor
+    default?: DogePlayerConstructor
+}
+
+function resolveDogePlayer() {
+    const playerWindow = window as DogePlayerWindow
+    return playerWindow.DogePlayer || playerWindow.DogeCloudPlayer || playerWindow.default || null
+}
+
+function waitForDogePlayer(timeoutMs = 5000) {
+    const start = Date.now()
+    return new Promise<void>((resolve, reject) => {
+        const tick = () => {
+            if (resolveDogePlayer()) {
                 resolve()
                 return
             }
-            existing.addEventListener('load', () => resolve())
+            if (Date.now() - start >= timeoutMs) {
+                reject(new Error('DogePlayer 构造器未暴露到全局对象'))
+                return
+            }
+            window.setTimeout(tick, 100)
+        }
+        tick()
+    })
+}
+
+function loadDogePlayerScript() {
+    if (dogePlayerLoader) return dogePlayerLoader
+
+    dogePlayerLoader = new Promise((resolve, reject) => {
+        if (resolveDogePlayer()) {
+            resolve()
+            return
+        }
+
+        const existing = document.querySelector('script[data-doge-player-sdk="true"]') as HTMLScriptElement | null
+        if (existing) {
+            const finish = () => waitForDogePlayer().then(resolve).catch(reject)
+            existing.addEventListener('load', finish, { once: true })
             existing.addEventListener('error', () => reject(new Error('加载 DogePlayer 脚本失败')))
+            window.setTimeout(finish, 0)
             return
         }
 
         const script = document.createElement('script')
         script.src = DOGE_PLAYER_SCRIPT
         script.async = true
-        script.onload = () => resolve()
+        script.crossOrigin = 'anonymous'
+        script.setAttribute('data-doge-player-sdk', 'true')
+        script.onload = () => { waitForDogePlayer().then(resolve).catch(reject) }
         script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
         document.head.appendChild(script)
     })
+
     return dogePlayerLoader
 }
 
 export default function VideoPage() {
-    const { videos, total, loading, page, pageSize, fetchVideos, uploadVideo, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
+    const { videos, total, loading, page, pageSize, fetchVideos, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
+    const addVideoFiles = useUploadStore((state) => state.addVideoFiles)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const playerContainerRef = useRef<HTMLDivElement>(null)
     const { message, modal } = App.useApp()
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [playInfo, setPlayInfo] = useState<VideoPlayInfo | null>(null)
-    const [useNativePlayer, setUseNativePlayer] = useState(true)
     const [sdkError, setSdkError] = useState<string | null>(null)
+    const [sdkLoading, setSdkLoading] = useState(false)
+    const sdkRequirementError = useMemo(() => {
+        if (!playInfo?.ready) return null
 
-    useEffect(() => { fetchVideos(1) }, [])
+        const vcode = playInfo.vcode?.trim()
+        const sdkUserID = firstNonEmptyString(
+            playInfo.player_user_id,
+            playerUserIDFromPlayURL(playInfo.play_url),
+        )
+        const sdkUserIDNum = Number(sdkUserID)
+
+        if (!vcode || !sdkUserID || Number.isNaN(sdkUserIDNum) || sdkUserIDNum <= 0) {
+            return 'DogePlayer 缺少固定 userId，请在服务端配置 IDEASAVER_DOGE_USER_ID'
+        }
+        return null
+    }, [playInfo])
+
+    useEffect(() => { fetchVideos(1) }, [fetchVideos])
 
     useEffect(() => {
         if (!playInfo || !playInfo.ready) return
 
         const vcode = playInfo.vcode?.trim()
-        const playerUserID = firstNonEmptyString(
+        const sdkUserID = firstNonEmptyString(
             playInfo.player_user_id,
             playerUserIDFromPlayURL(playInfo.play_url),
         )
-        const playerUserIDNum = Number(playerUserID)
-        if (!vcode || !playerUserID || Number.isNaN(playerUserIDNum) || playerUserIDNum <= 0) {
-            setUseNativePlayer(true)
+        const sdkUserIDNum = Number(sdkUserID)
+        const playerContainer = playerContainerRef.current
+
+        if (sdkRequirementError || !vcode || !sdkUserID || Number.isNaN(sdkUserIDNum) || sdkUserIDNum <= 0) {
             return
         }
 
         let disposed = false
-        let playerInstance: any = null
-        setSdkError(null)
+        let playerInstance: DogePlayerInstance | null = null
+
+        if (playerContainer) {
+            playerContainer.innerHTML = ''
+        }
 
         loadDogePlayerScript()
             .then(() => {
                 if (disposed) return
-                const DogePlayer = (window as any).DogePlayer || (window as any).DogeCloudPlayer
-                if (!DogePlayer || !playerContainerRef.current) {
-                    setUseNativePlayer(true)
-                    setSdkError('DogePlayer SDK 未注入，已切换为原生播放器')
+
+                const DogePlayer = resolveDogePlayer()
+                if (!DogePlayer || !playerContainer) {
+                    setSdkError('DogePlayer SDK 未成功注入，请检查 player.dogecloud.com 的网络连通性')
+                    setSdkLoading(false)
                     return
                 }
 
                 try {
-                    playerContainerRef.current.innerHTML = ''
                     playerInstance = new DogePlayer({
-                        container: playerContainerRef.current,
+                        container: playerContainer,
                         vcode,
-                        userId: playerUserIDNum,
+                        userId: sdkUserIDNum,
                         autoPlay: true,
                     })
-                    setUseNativePlayer(false)
+                    setSdkLoading(false)
                 } catch {
-                    setUseNativePlayer(true)
-                    setSdkError('DogePlayer 初始化失败，已切换为原生播放器')
+                    setSdkError('DogePlayer 初始化失败，请检查 VCode 与多吉云用户 ID 配置')
+                    setSdkLoading(false)
                 }
             })
             .catch(() => {
                 if (!disposed) {
-                    setUseNativePlayer(true)
-                    setSdkError('加载 DogePlayer 失败，已切换为原生播放器')
+                    setSdkError('DogePlayer 脚本加载失败。官方播放器不支持本地部署，请确保可访问 player.dogecloud.com')
+                    setSdkLoading(false)
                 }
             })
 
         return () => {
             disposed = true
+            setSdkLoading(false)
             if (playerInstance && typeof playerInstance.destroy === 'function') {
                 playerInstance.destroy()
             }
-            if (playerContainerRef.current) {
-                playerContainerRef.current.innerHTML = ''
+            if (playerContainer) {
+                playerContainer.innerHTML = ''
             }
         }
-    }, [playInfo])
+    }, [playInfo, sdkRequirementError])
 
     const handleUpload = () => fileInputRef.current?.click()
 
-    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]
-        if (!file) return
-        try {
-            await uploadVideo(file)
-            message.success('视频上传成功，等待转码...')
-        } catch {
-            message.error('上传失败')
-        }
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || [])
+        if (files.length === 0) return
+
+        addVideoFiles(files)
+        message.success(`已将 ${files.length} 个视频加入上传队列`)
         e.target.value = ''
     }
 
     const handlePlay = async (id: string) => {
         try {
+            setSdkError(null)
+            setSdkLoading(false)
             const info = await getPlayInfo(id)
             if (!info.ready) {
+                setSdkLoading(false)
                 message.info(info.message || '视频仍在转码处理中，请稍后重试')
-                return
-            }
-            if (!info.play_url) {
-                message.error('视频播放信息不完整，请稍后重试')
-                return
+            } else {
+                setSdkLoading(true)
             }
             setPlayInfo(info)
-        } catch {
-            message.error('获取播放地址失败')
+        } catch (error: unknown) {
+            setSdkLoading(false)
+            const maybeMessage = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+            message.error(maybeMessage || '获取播放地址失败')
         }
     }
 
@@ -194,7 +265,7 @@ export default function VideoPage() {
                                 <Card
                                     hoverable
                                     style={{ borderColor: selectedIds.has(video.id) ? '#1677ff' : undefined }}
-                                    cover={
+                                    cover={(
                                         <VideoThumbnail
                                             src={video.thumbnail_small_url || video.thumbnail_url}
                                             alt={video.title}
@@ -202,7 +273,7 @@ export default function VideoPage() {
                                             borderRadius={0}
                                             iconSize={30}
                                         />
-                                    }
+                                    )}
                                     onClick={() => toggleSelect(video.id)}
                                     actions={[
                                         <Button type="text" icon={<PlayCircleOutlined />} onClick={(e) => { e.stopPropagation(); handlePlay(video.id) }} key="play">
@@ -221,15 +292,26 @@ export default function VideoPage() {
                                     ]}
                                 >
                                     <Card.Meta
-                                        title={
-                                            <Text ellipsis={{ tooltip: video.title }} style={{ maxWidth: 180 }}>
-                                                {video.title}
-                                            </Text>
-                                        }
-                                        description={
+                                        title={(
+                                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                <Text ellipsis={{ tooltip: video.title }} style={{ maxWidth: 180 }}>
+                                                    {video.title}
+                                                </Text>
+                                                {renderTranscodeTag(video)}
+                                            </Space>
+                                        )}
+                                        description={(
                                             <Space direction="vertical" size={4}>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>{formatBytes(video.size)}</Text>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>{formatDate(video.created_at)}</Text>
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    VCode: {video.vcode || '-'}
+                                                </Text>
+                                                {video.transcode_message && (
+                                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                                        {video.transcode_message}
+                                                    </Text>
+                                                )}
                                                 <div onClick={(e) => e.stopPropagation()}>
                                                     <Switch
                                                         size="small"
@@ -240,7 +322,7 @@ export default function VideoPage() {
                                                     />
                                                 </div>
                                             </Space>
-                                        }
+                                        )}
                                     />
                                 </Card>
                             </Col>
@@ -255,46 +337,82 @@ export default function VideoPage() {
                 </>
             )}
 
-            <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={handleFileSelect} />
+            <input ref={fileInputRef} type="file" accept="video/*" multiple style={{ display: 'none' }} onChange={handleFileSelect} />
 
             <Modal
                 title="视频播放"
                 open={!!playInfo}
                 onCancel={() => {
                     setPlayInfo(null)
-                    setUseNativePlayer(true)
                     setSdkError(null)
+                    setSdkLoading(false)
                 }}
                 footer={null}
                 width={820}
                 destroyOnClose
             >
                 {playInfo && (
-                    <>
-                        {sdkError && (
+                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                        {!playInfo.ready && (
                             <Alert
-                                type="warning"
+                                type="info"
                                 showIcon
-                                style={{ marginBottom: 12 }}
-                                message={sdkError}
+                                message={playInfo.message || '视频转码中，请等待多吉云回调完成后再播放'}
                             />
                         )}
-                        {!useNativePlayer && playInfo.vcode && playInfo.player_user_id ? (
-                            <div
-                                ref={playerContainerRef}
-                                style={{ width: '100%', minHeight: 420, background: '#000' }}
+                        {playInfo.ready && (sdkRequirementError || sdkError) && (
+                            <Alert
+                                type="error"
+                                showIcon
+                                message={sdkRequirementError || sdkError}
                             />
+                        )}
+                        {playInfo.ready ? (
+                            (sdkRequirementError || sdkError) ? (
+                                <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+                                    官方 DogePlayer 未能启动，当前已停止回退到原生直链播放器。
+                                </div>
                         ) : (
-                            <video controls autoPlay style={{ width: '100%', maxHeight: '70vh' }}>
-                                <source src={playInfo.play_url} />
-                                您的浏览器不支持视频播放
-                            </video>
+                            <div style={{ position: 'relative' }}>
+                                <div
+                                    ref={playerContainerRef}
+                                    style={{ width: '100%', minHeight: 420, background: '#000' }}
+                                />
+                                {sdkLoading && (
+                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                                        <Space direction="vertical" size={12} align="center">
+                                            <Spin />
+                                            <Text style={{ color: '#fff' }}>正在加载 DogePlayer...</Text>
+                                        </Space>
+                                    </div>
+                                )}
+                            </div>
+                        )
+                        ) : (
+                            <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+                                视频转码中，收到多吉云 `msg=transcode` 回调后会自动允许播放。
+                            </div>
                         )}
-                    </>
+                    </Space>
                 )}
             </Modal>
         </div>
     )
+}
+
+function renderTranscodeTag(video: Video) {
+    switch (video.transcode_status) {
+    case 'ready':
+        return <Tag color="green">可播放</Tag>
+    case 'failed':
+        return <Tag color="red">转码失败</Tag>
+    case 'blocked':
+        return <Tag color="volcano">已屏蔽</Tag>
+    case 'processing':
+        return <Tag color="blue">转码中</Tag>
+    default:
+        return <Tag>排队中</Tag>
+    }
 }
 
 function firstNonEmptyString(...values: Array<string | undefined>) {

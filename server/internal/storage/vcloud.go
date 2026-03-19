@@ -41,6 +41,7 @@ type VideoInfo struct {
 	PlayURL           string
 	ThumbnailURL      string
 	ThumbnailSmallURL string
+	Status            int
 }
 
 // NewVCloudClient creates a new DogeCloud VCloud API client.
@@ -209,14 +210,23 @@ func (c *VCloudClient) UploadVideo(title string, fileReader io.Reader, filename 
 }
 
 // GetVideoStreams gets the video playback URLs.
-func (c *VCloudClient) GetVideoStreams(vcode string) (map[string]any, error) {
-	path := fmt.Sprintf("/video/streams.json?vcode=%s&platform=pch5", vcode)
+func (c *VCloudClient) GetVideoStreams(vcode, clientIP, userAgent string) (map[string]any, error) {
+	params := url.Values{}
+	params.Set("vcode", strings.TrimSpace(vcode))
+	params.Set("platform", "pch5")
+	if ip := strings.TrimSpace(clientIP); ip != "" {
+		params.Set("ip", ip)
+	}
+	if ua := strings.TrimSpace(userAgent); ua != "" {
+		params.Set("ua", ua)
+	}
+	path := "/video/streams.json?" + params.Encode()
 	return c.doRequest("GET", path, "")
 }
 
 // GetBestPlayURL tries to extract a direct playable URL from streams response.
-func (c *VCloudClient) GetBestPlayURL(vcode string) (string, error) {
-	streams, err := c.GetVideoStreams(vcode)
+func (c *VCloudClient) GetBestPlayURL(vcode, clientIP, userAgent string) (string, error) {
+	streams, err := c.GetVideoStreams(vcode, clientIP, userAgent)
 	if err != nil {
 		return "", err
 	}
@@ -244,9 +254,10 @@ func (c *VCloudClient) GetVideoInfo(vid string) (*VideoInfo, error) {
 
 	info := &VideoInfo{
 		VCode:             asString(data["vcode"]),
-		PlayURL:           extractPlayURL(data),
-		ThumbnailURL:      asString(data["thumbnail"]),
-		ThumbnailSmallURL: asString(data["thumbnail_small"]),
+		PlayURL:           normalizeRemoteURL(extractPlayURL(data)),
+		ThumbnailURL:      normalizeRemoteURL(asString(data["thumbnail"])),
+		ThumbnailSmallURL: normalizeRemoteURL(asString(data["thumbnail_small"])),
+		Status:            asInt(data["status"]),
 	}
 	info.PlayerUserID = firstNonEmptyString(
 		asString(data["userId"]),
@@ -335,19 +346,28 @@ func extractPlayURL(data map[string]any) string {
 
 	for _, key := range []string{"play_url", "playUrl", "url"} {
 		if v := strings.TrimSpace(asString(data[key])); v != "" {
-			return v
+			return normalizeRemoteURL(v)
 		}
 	}
 
-	if streams, ok := data["streams"].([]any); ok {
-		for _, item := range streams {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			for _, key := range []string{"play_url", "playUrl", "url"} {
-				if v := strings.TrimSpace(asString(m[key])); v != "" {
-					return v
+	for _, groupKey := range []string{"stream", "streams"} {
+		if streams, ok := data[groupKey].([]any); ok {
+			for _, item := range streams {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, key := range []string{"play_url", "playUrl", "url"} {
+					if v := strings.TrimSpace(asString(m[key])); v != "" {
+						return normalizeRemoteURL(v)
+					}
+				}
+				if backups, ok := m["backup_urls"].([]any); ok {
+					for _, backup := range backups {
+						if v := strings.TrimSpace(asString(backup)); v != "" {
+							return normalizeRemoteURL(v)
+						}
+					}
 				}
 			}
 		}
@@ -393,4 +413,36 @@ func asString(v any) string {
 	default:
 		return ""
 	}
+}
+
+func asInt(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return 0
+		}
+		var out int
+		_, _ = fmt.Sscanf(t, "%d", &out)
+		return out
+	default:
+		return 0
+	}
+}
+
+func normalizeRemoteURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "//") {
+		return "https:" + value
+	}
+	return value
 }

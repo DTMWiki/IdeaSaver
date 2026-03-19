@@ -108,6 +108,10 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 
 	// Serve frontend static files in production
 	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/s/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		c.File("./web/dist/index.html")
 	})
 }
@@ -746,7 +750,7 @@ func handleGetPlayURL(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfoForViewer(c.Request.Context(), id, user.ID, c.ClientIP(), c.Request.UserAgent())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -764,7 +768,7 @@ func handleGetPlayInfo(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfoForViewer(c.Request.Context(), id, user.ID, c.ClientIP(), c.Request.UserAgent())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

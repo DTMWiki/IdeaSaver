@@ -70,6 +70,8 @@ export interface Video {
     player_user_id?: string
     thumbnail_url?: string
     thumbnail_small_url?: string
+    transcode_status: 'pending' | 'processing' | 'ready' | 'failed' | 'blocked'
+    transcode_message?: string
     status: number // 0=disabled 1=enabled
     play_url?: string
     size: number
@@ -83,7 +85,7 @@ export interface AuditLog {
     action: string
     resource?: string
     resource_id?: string
-    details?: Record<string, unknown>
+    details?: unknown
     ip_address?: string
     user_agent?: string
     created_at: string
@@ -118,6 +120,7 @@ export interface UploadFileTask {
     taskId?: string // server-assigned task ID
     file: File
     parentId: string | null
+    targetType: 'file' | 'video'
     filename: string
     totalSize: number
     uploadedSize: number
@@ -127,7 +130,11 @@ export interface UploadFileTask {
     status: 'pending' | 'uploading' | 'paused' | 'completed' | 'failed'
     progress: number // 0-100
     speed: number // bytes per second
+    phase?: 'uploading' | 'processing' | 'waiting_transcode'
+    detail?: string
     url?: string
     markdown?: string
+    videoId?: string
+    vcode?: string
     error?: string
 }

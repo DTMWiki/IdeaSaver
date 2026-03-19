@@ -15,6 +15,8 @@ type Services struct {
 	Share  *ShareService
 	Admin  *AdminService
 	SSE    *SSEService
+
+	AuditLogs *repository.AuditLogRepository
 }
 
 // NewServices creates all service instances.
@@ -22,12 +24,13 @@ func NewServices(cfg *config.Config, repos *repository.Repositories, oss *storag
 	sseService := NewSSEService()
 
 	return &Services{
-		Auth:   NewAuthService(cfg, repos.Users),
-		File:   NewFileService(cfg, repos, oss),
-		Video:  NewVideoService(cfg, repos, vcloud, sseService),
-		Upload: NewUploadService(cfg, repos, oss, sseService),
-		Share:  NewShareService(cfg, repos, oss),
-		Admin:  NewAdminService(cfg, repos, oss),
-		SSE:    sseService,
+		Auth:      NewAuthService(cfg, repos.Users, repos.AuditLogs),
+		File:      NewFileService(cfg, repos, oss),
+		Video:     NewVideoService(cfg, repos, vcloud, sseService),
+		Upload:    NewUploadService(cfg, repos, oss, sseService),
+		Share:     NewShareService(cfg, repos, oss),
+		Admin:     NewAdminService(cfg, repos, oss),
+		SSE:       sseService,
+		AuditLogs: repos.AuditLogs,
 	}
 }

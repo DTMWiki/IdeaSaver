@@ -20,14 +20,16 @@ export function formatBytes(bytes: number, decimals = 1): string {
  * Format date string to readable format.
  */
 export function formatDate(date: string): string {
-    return dayjs(date).format('YYYY-MM-DD HH:mm')
+    const parsed = dayjs(date)
+    return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : '--'
 }
 
 /**
  * Format date to relative time (e.g. "3 小时前").
  */
 export function formatRelativeTime(date: string): string {
-    return dayjs(date).fromNow()
+    const parsed = dayjs(date)
+    return parsed.isValid() ? parsed.fromNow() : '时间未知'
 }
 
 /**
