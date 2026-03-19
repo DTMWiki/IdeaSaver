@@ -150,7 +150,7 @@ func NewOSSClient(cfg *config.Config) (*OSSClient, error) {
 	}
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
+		o.UsePathStyle = shouldUsePathStyle(endpoint)
 	})
 
 	return &OSSClient{
@@ -413,6 +413,25 @@ func extractRegionFromEndpoint(endpoint string) (string, bool) {
 		return parts[1], true
 	}
 	return "", false
+}
+
+func shouldUsePathStyle(endpoint string) bool {
+	host := strings.TrimSpace(endpoint)
+	if host == "" {
+		return true
+	}
+	if strings.Contains(host, "://") {
+		if parsed, err := url.Parse(host); err == nil {
+			host = parsed.Hostname()
+		}
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+
+	// Tencent COS / DogeCloud-backed COS endpoints require bucket in host.
+	if strings.Contains(host, ".myqcloud.com") || strings.Contains(host, ".cos.") {
+		return false
+	}
+	return true
 }
 
 // PutObject uploads an object to OSS.

@@ -185,7 +185,7 @@ func (c *VCloudClient) UploadVideo(title string, fileReader io.Reader, filename 
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
+		o.UsePathStyle = shouldUsePathStyle(vodInfo.S3Endpoint)
 	})
 
 	putInput := &s3.PutObjectInput{
