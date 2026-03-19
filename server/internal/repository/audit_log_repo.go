@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
@@ -20,12 +21,20 @@ func NewAuditLogRepository(db *sql.DB) *AuditLogRepository {
 
 func (r *AuditLogRepository) Create(ctx context.Context, log *model.AuditLog) error {
 	detailsJSON, _ := json.Marshal(log.Details)
+	var ipAddress any
+	if value := strings.TrimSpace(log.IPAddress); value != "" {
+		ipAddress = value
+	}
+	var userAgent any
+	if value := strings.TrimSpace(log.UserAgent); value != "" {
+		userAgent = value
+	}
 	return r.db.QueryRowContext(ctx,
 		`INSERT INTO audit_logs (user_id, action, resource, resource_id, details, ip_address, user_agent)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id, created_at`,
 		log.UserID, log.Action, log.Resource, log.ResourceID,
-		detailsJSON, log.IPAddress, log.UserAgent,
+		detailsJSON, ipAddress, userAgent,
 	).Scan(&log.ID, &log.CreatedAt)
 }
 

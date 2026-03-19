@@ -7,8 +7,47 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
 )
+
+func TestCreateTreatsEmptyIPAndUserAgentAsNull(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	repo := NewAuditLogRepository(db)
+	userID := uuid.New()
+	now := time.Now()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO audit_logs (user_id, action, resource, resource_id, details, ip_address, user_agent)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id, created_at`)).
+		WithArgs(userID, "upload", "file", nil, []byte(`{"file_name":"cover.png"}`), nil, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(1, now))
+
+	log := &model.AuditLog{
+		UserID:   userID,
+		Action:   "upload",
+		Resource: "file",
+		Details: map[string]any{
+			"file_name": "cover.png",
+		},
+	}
+
+	if err := repo.Create(context.Background(), log); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
 
 func TestListByUserHandlesNullableFields(t *testing.T) {
 	t.Parallel()
