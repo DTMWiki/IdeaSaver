@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
@@ -18,7 +19,12 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 	r.GET("/api/auth/login", handleLogin(svc))
 	r.GET("/api/auth/callback", handleCallback(svc))
 	r.GET("/api/shares/:code", handleAccessShare(svc))
+	r.GET("/api/system/forbidden-image", handleForbiddenImage())
+	// DogeCloud callback endpoint: support both GET and POST payload styles.
+	r.GET("/api/videos/callback", handleVideoCallback(svc))
 	r.POST("/api/videos/callback", handleVideoCallback(svc))
+	r.GET("/api/videos/callback/transcode", handleVideoCallback(svc))
+	r.POST("/api/videos/callback/transcode", handleVideoCallback(svc))
 
 	// Direct link proxy (public, but file must exist)
 	r.GET("/s/:user_id/:filename", handleDirectLink(svc))
@@ -60,6 +66,7 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 		files.GET("/:id/preview", handlePreview(svc))
 		files.GET("/:id/url", handleGetFileURL(svc))
 		files.POST("/:id/share", handleCreateShare(svc))
+		files.POST("/:id/appeal", handleSubmitFileAppeal(svc))
 	}
 
 	// Shares
@@ -75,6 +82,7 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 		videos.DELETE("/:id", handleDeleteVideo(svc))
 		videos.DELETE("/batch", handleBatchDeleteVideos(svc))
 		videos.GET("/:id/play", handleGetPlayURL(svc))
+		videos.GET("/:id/play-info", handleGetPlayInfo(svc))
 	}
 
 	// SSE
@@ -85,9 +93,13 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 	admin.Use(middleware.RequireAdmin())
 	{
 		admin.GET("/files", handleAdminListFiles(svc))
+		admin.PUT("/files/:id/ban", handleAdminBanFile(svc))
+		admin.PUT("/files/:id/unban", handleAdminUnbanFile(svc))
 		admin.DELETE("/files/:id", handleAdminDeleteFile(svc))
 		admin.GET("/videos", handleAdminListVideos(svc))
 		admin.DELETE("/videos/:id", handleAdminDeleteVideo(svc))
+		admin.GET("/appeals", handleAdminListAppeals(svc))
+		admin.PUT("/appeals/:id/review", handleAdminReviewAppeal(svc))
 		admin.GET("/logs", handleAdminListLogs(svc))
 		admin.GET("/users", handleAdminListUsers(svc))
 		admin.PUT("/users/:id/quota", handleAdminUpdateQuota(svc))
@@ -209,7 +221,11 @@ func handleUploadChunk(svc *service.Services) gin.HandlerFunc {
 func handlePauseUpload(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		taskID, _ := uuid.Parse(c.Param("task_id"))
+		taskID, err := uuid.Parse(c.Param("task_id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务ID"})
+			return
+		}
 		if err := svc.Upload.PauseUpload(c.Request.Context(), taskID, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -221,7 +237,11 @@ func handlePauseUpload(svc *service.Services) gin.HandlerFunc {
 func handleResumeUpload(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		taskID, _ := uuid.Parse(c.Param("task_id"))
+		taskID, err := uuid.Parse(c.Param("task_id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务ID"})
+			return
+		}
 		if err := svc.Upload.ResumeUpload(c.Request.Context(), taskID, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -233,7 +253,11 @@ func handleResumeUpload(svc *service.Services) gin.HandlerFunc {
 func handleCompleteUpload(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		taskID, _ := uuid.Parse(c.Param("task_id"))
+		taskID, err := uuid.Parse(c.Param("task_id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务ID"})
+			return
+		}
 
 		var req struct {
 			ParentID *uuid.UUID `json:"parent_id"`
@@ -279,7 +303,11 @@ func handleListFiles(svc *service.Services) gin.HandlerFunc {
 		user := middleware.GetUser(c)
 		var parentID *uuid.UUID
 		if pid := c.Query("parent_id"); pid != "" {
-			id, _ := uuid.Parse(pid)
+			id, err := uuid.Parse(pid)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "无效的父目录ID"})
+				return
+			}
 			parentID = &id
 		}
 
@@ -316,7 +344,11 @@ func handleMkdir(svc *service.Services) gin.HandlerFunc {
 func handleRename(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		var req struct {
 			Name string `json:"name"`
 		}
@@ -336,7 +368,11 @@ func handleRename(svc *service.Services) gin.HandlerFunc {
 func handleMove(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		var req struct {
 			ParentID *uuid.UUID `json:"parent_id"`
 		}
@@ -377,7 +413,11 @@ func handleCopy(svc *service.Services) gin.HandlerFunc {
 func handleSoftDelete(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		if err := svc.File.SoftDelete(c.Request.Context(), id, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -406,7 +446,11 @@ func handleBatchDelete(svc *service.Services) gin.HandlerFunc {
 func handleRestore(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		if err := svc.File.Restore(c.Request.Context(), id, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -418,7 +462,11 @@ func handleRestore(svc *service.Services) gin.HandlerFunc {
 func handlePermanentDelete(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		if err := svc.File.PermanentDelete(c.Request.Context(), id, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -442,16 +490,23 @@ func handleListTrash(svc *service.Services) gin.HandlerFunc {
 func handlePreview(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
-		_ = user // ownership checked inside ProxyFile
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 
 		file, err := svc.File.GetFileByID(c.Request.Context(), id, user.ID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
 			return
 		}
+		if file.ModerationStatus == "banned" {
+			c.Redirect(http.StatusFound, "/api/system/forbidden-image")
+			return
+		}
 
-		reader, contentType, contentLength, err := svc.File.ProxyFile(c.Request.Context(), user.ID.String(), file.StorageKey)
+		reader, contentType, contentLength, err := svc.File.ProxyFile(c.Request.Context(), file.StorageKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -469,7 +524,11 @@ func handlePreview(svc *service.Services) gin.HandlerFunc {
 func handleGetFileURL(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 
 		url, markdown, err := svc.File.GetFileURL(c.Request.Context(), id, user.ID)
 		if err != nil {
@@ -480,12 +539,43 @@ func handleGetFileURL(svc *service.Services) gin.HandlerFunc {
 	}
 }
 
+func handleSubmitFileAppeal(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
+
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		appeal, err := svc.File.SubmitAppeal(c.Request.Context(), id, user.ID, req.Reason)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"appeal": appeal})
+	}
+}
+
 // --- Share Handlers ---
 
 func handleCreateShare(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
 		var req struct {
 			Password  string `json:"password"`
 			ExpiresIn int    `json:"expires_in"`
@@ -534,7 +624,11 @@ func handleListShares(svc *service.Services) gin.HandlerFunc {
 func handleDeleteShare(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的分享ID"})
+			return
+		}
 		if err := svc.Share.DeleteShare(c.Request.Context(), id, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -587,7 +681,11 @@ func handleListVideos(svc *service.Services) gin.HandlerFunc {
 func handleSetVideoStatus(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
 		var req struct {
 			Status int16 `json:"status"`
 		}
@@ -607,7 +705,11 @@ func handleSetVideoStatus(svc *service.Services) gin.HandlerFunc {
 func handleDeleteVideo(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
 		if err := svc.Video.DeleteVideo(c.Request.Context(), id, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -638,28 +740,112 @@ func handleBatchDeleteVideos(svc *service.Services) gin.HandlerFunc {
 func handleGetPlayURL(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
 
-		playURL, err := svc.Video.GetPlayURL(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"play_url": playURL})
+		c.JSON(http.StatusOK, info)
+	}
+}
+
+func handleGetPlayInfo(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
+
+		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, info)
 	}
 }
 
 func handleVideoCallback(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		msg := c.Query("msg")
-		vid := c.Query("vid")
-		callback := c.Query("callback")
+		payload := service.VideoCallbackPayload{
+			Msg:          strings.TrimSpace(c.Query("msg")),
+			VID:          strings.TrimSpace(c.Query("vid")),
+			VCode:        strings.TrimSpace(c.Query("vcode")),
+			PlayerUserID: strings.TrimSpace(firstNonEmpty(c.Query("userId"), c.Query("userid"))),
+			Callback:     strings.TrimSpace(firstNonEmpty(c.Query("callbackString"), c.Query("callback"))),
+		}
 
-		if err := svc.Video.HandleCallback(c.Request.Context(), msg, vid, callback); err != nil {
+		if c.Request.Method == http.MethodPost {
+			_ = c.Request.ParseForm()
+			payload.Msg = strings.TrimSpace(firstNonEmpty(payload.Msg, c.PostForm("msg")))
+			payload.VID = strings.TrimSpace(firstNonEmpty(payload.VID, c.PostForm("vid")))
+			payload.VCode = strings.TrimSpace(firstNonEmpty(payload.VCode, c.PostForm("vcode")))
+			payload.PlayerUserID = strings.TrimSpace(firstNonEmpty(
+				payload.PlayerUserID,
+				c.PostForm("userId"),
+				c.PostForm("userid"),
+			))
+			payload.Callback = strings.TrimSpace(firstNonEmpty(
+				payload.Callback,
+				c.PostForm("callbackString"),
+				c.PostForm("callback"),
+			))
+
+			var body map[string]any
+			if err := c.ShouldBindJSON(&body); err == nil {
+				payload.Msg = strings.TrimSpace(firstNonEmpty(payload.Msg, asString(body["msg"])))
+				payload.VID = strings.TrimSpace(firstNonEmpty(payload.VID, asString(body["vid"])))
+				payload.VCode = strings.TrimSpace(firstNonEmpty(payload.VCode, asString(body["vcode"])))
+				payload.PlayerUserID = strings.TrimSpace(firstNonEmpty(
+					payload.PlayerUserID,
+					asString(body["userId"]),
+					asString(body["userid"]),
+				))
+				payload.Callback = strings.TrimSpace(firstNonEmpty(
+					payload.Callback,
+					asString(body["callbackString"]),
+					asString(body["callback"]),
+				))
+			}
+		}
+
+		if err := svc.Video.HandleCallback(c.Request.Context(), payload); err != nil {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.String(http.StatusOK, "DogeCloud Callback Success")
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func asString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strconv.FormatInt(int64(t), 10)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return ""
 	}
 }
 
@@ -669,8 +855,22 @@ func handleDirectLink(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.Param("user_id")
 		filename := c.Param("filename")
+		if _, err := uuid.Parse(userID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
 
-		reader, contentType, contentLength, err := svc.File.ProxyFile(c.Request.Context(), userID, filename)
+		file, err := svc.File.ResolvePublicFile(c.Request.Context(), userID, filename)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		if file.ModerationStatus == "banned" {
+			c.Redirect(http.StatusFound, "/api/system/forbidden-image")
+			return
+		}
+
+		reader, contentType, contentLength, err := svc.File.ProxyFile(c.Request.Context(), file.StorageKey)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
 			return
@@ -683,6 +883,13 @@ func handleDirectLink(svc *service.Services) gin.HandlerFunc {
 		}
 		c.Header("Cache-Control", "public, max-age=86400")
 		io.Copy(c.Writer, reader)
+	}
+}
+
+func handleForbiddenImage() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "image/svg+xml", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"><rect width="1200" height="630" fill="#fff5f5"/><rect x="40" y="40" width="1120" height="550" rx="24" fill="#fff" stroke="#ffc9c9" stroke-width="4"/><circle cx="180" cy="180" r="52" fill="#ff6b6b"/><path d="M180 148 L180 188" stroke="#fff" stroke-width="10" stroke-linecap="round"/><circle cx="180" cy="218" r="6" fill="#fff"/><text x="280" y="190" fill="#c92a2a" font-size="64" font-family="Arial, sans-serif" font-weight="700">Access Denied</text><text x="280" y="250" fill="#495057" font-size="32" font-family="Arial, sans-serif">This resource is under review by the platform administrator.</text><text x="280" y="310" fill="#868e96" font-size="24" font-family="Arial, sans-serif">If you are the owner, please submit an appeal ticket in the dashboard.</text></svg>`))
 	}
 }
 
@@ -741,9 +948,61 @@ func handleAdminListFiles(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminDeleteFile(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, _ := uuid.Parse(c.Param("id"))
-		if err := svc.Admin.DeleteFile(c.Request.Context(), id); err != nil {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
+		if err := svc.Admin.DeleteFile(c.Request.Context(), id, admin.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+func handleAdminBanFile(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
+
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := svc.Admin.BanFile(c.Request.Context(), id, admin.ID, req.Reason); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+func handleAdminUnbanFile(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件ID"})
+			return
+		}
+
+		var req struct {
+			Comment string `json:"comment"`
+		}
+		_ = c.ShouldBindJSON(&req)
+
+		if err := svc.Admin.UnbanFile(c.Request.Context(), id, admin.ID, req.Comment); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -766,9 +1025,54 @@ func handleAdminListVideos(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminDeleteVideo(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
 		if err := svc.Admin.DeleteVideo(c.Request.Context(), id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+func handleAdminListAppeals(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		status := c.Query("status")
+		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+
+		appeals, total, err := svc.Admin.ListAppeals(c.Request.Context(), status, offset, limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"appeals": appeals, "total": total})
+	}
+}
+
+func handleAdminReviewAppeal(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的工单ID"})
+			return
+		}
+
+		var req struct {
+			Decision string `json:"decision"`
+			Comment  string `json:"comment"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := svc.Admin.ReviewAppeal(c.Request.Context(), id, admin.ID, req.Decision, req.Comment); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -806,7 +1110,11 @@ func handleAdminListUsers(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminUpdateQuota(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, _ := uuid.Parse(c.Param("id"))
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户ID"})
+			return
+		}
 		var req struct {
 			Quota int64 `json:"quota"`
 		}

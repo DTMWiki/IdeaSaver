@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"strconv"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
@@ -29,16 +31,23 @@ func (r *UploadTaskRepository) Create(ctx context.Context, t *model.UploadTask) 
 
 func (r *UploadTaskRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.UploadTask, error) {
 	var t model.UploadTask
+	var partETagsRaw []byte
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, filename, total_size, uploaded_size, chunk_size, total_chunks,
-		        uploaded_chunks, storage_key, upload_id, status, target_type, created_at, updated_at
+		        uploaded_chunks, storage_key, upload_id, part_etags, status, target_type, created_at, updated_at
 		 FROM upload_tasks WHERE id = $1`, id).Scan(
 		&t.ID, &t.UserID, &t.Filename, &t.TotalSize, &t.UploadedSize,
 		&t.ChunkSize, &t.TotalChunks, &t.UploadedChunks, &t.StorageKey,
-		&t.UploadID, &t.Status, &t.TargetType, &t.CreatedAt, &t.UpdatedAt,
+		&t.UploadID, &partETagsRaw, &t.Status, &t.TargetType, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if len(partETagsRaw) > 0 {
+		_ = json.Unmarshal(partETagsRaw, &t.PartETags)
+	}
+	if t.PartETags == nil {
+		t.PartETags = map[string]string{}
 	}
 	return &t, nil
 }
@@ -47,6 +56,24 @@ func (r *UploadTaskRepository) UpdateChunkProgress(ctx context.Context, id uuid.
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE upload_tasks SET uploaded_chunks = $2, uploaded_size = $3, status = 'uploading', updated_at = NOW()
 		 WHERE id = $1`, id, uploadedChunks, uploadedSize)
+	return err
+}
+
+func (r *UploadTaskRepository) UpdateMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string, uploadedChunks int, uploadedSize int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE upload_tasks
+		 SET uploaded_chunks = $2,
+		     uploaded_size = $3,
+		     status = 'uploading',
+		     part_etags = jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$4], to_jsonb($5::text), true),
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id,
+		uploadedChunks,
+		uploadedSize,
+		strconv.Itoa(int(partNumber)),
+		etag,
+	)
 	return err
 }
 

@@ -27,7 +27,7 @@ func NewServices(cfg *config.Config, repos *repository.Repositories, oss *storag
 		Video:  NewVideoService(cfg, repos, vcloud, sseService),
 		Upload: NewUploadService(cfg, repos, oss, sseService),
 		Share:  NewShareService(cfg, repos, oss),
-		Admin:  NewAdminService(cfg, repos),
+		Admin:  NewAdminService(cfg, repos, oss),
 		SSE:    sseService,
 	}
 }

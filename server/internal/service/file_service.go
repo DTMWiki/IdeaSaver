@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -16,11 +18,28 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrFileBanned = errors.New("file is banned")
+
 // FileService handles file management business logic.
 type FileService struct {
 	cfg   *config.Config
 	repos *repository.Repositories
 	oss   *storage.OSSClient
+}
+
+// GetFileByID returns a file owned by the given user.
+func (s *FileService) GetFileByID(ctx context.Context, id, userID uuid.UUID) (*model.File, error) {
+	file, err := s.repos.Files.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if file.UserID != userID {
+		return nil, fmt.Errorf("permission denied")
+	}
+	if file.DeletedAt != nil {
+		return nil, fmt.Errorf("file deleted")
+	}
+	return file, nil
 }
 
 func NewFileService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient) *FileService {
@@ -35,10 +54,11 @@ func (s *FileService) ListFiles(ctx context.Context, userID uuid.UUID, parentID 
 // CreateDirectory creates a new directory.
 func (s *FileService) CreateDirectory(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID, name string) (*model.File, error) {
 	dir := &model.File{
-		UserID:      userID,
-		ParentID:    parentID,
-		Name:        name,
-		IsDirectory: true,
+		UserID:           userID,
+		ParentID:         parentID,
+		Name:             name,
+		IsDirectory:      true,
+		ModerationStatus: "normal",
 	}
 	if err := s.repos.Files.Create(ctx, dir); err != nil {
 		return nil, err
@@ -92,15 +112,16 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	publicURL := fmt.Sprintf("%s/s/%s/%s", s.cfg.PublicBaseURL, userID.String(), filepath.Base(newKey))
 
 	newFile := &model.File{
-		UserID:       userID,
-		ParentID:     destParentID,
-		Name:         src.Name,
-		StorageKey:   newKey,
-		IsDirectory:  src.IsDirectory,
-		MimeType:     src.MimeType,
-		Size:         src.Size,
-		PublicURL:    publicURL,
-		ThumbnailKey: src.ThumbnailKey,
+		UserID:           userID,
+		ParentID:         destParentID,
+		Name:             src.Name,
+		StorageKey:       newKey,
+		IsDirectory:      src.IsDirectory,
+		MimeType:         src.MimeType,
+		Size:             src.Size,
+		PublicURL:        publicURL,
+		ThumbnailKey:     src.ThumbnailKey,
+		ModerationStatus: "normal",
 	}
 
 	if err := s.repos.Files.Create(ctx, newFile); err != nil {
@@ -193,9 +214,63 @@ func (s *FileService) GetFileURL(ctx context.Context, fileID uuid.UUID, userID u
 }
 
 // ProxyFile returns a reader for the file content from OSS.
-func (s *FileService) ProxyFile(ctx context.Context, userIDStr, filename string) (io.ReadCloser, string, int64, error) {
-	storageKey := userIDStr + "/" + filename
+func (s *FileService) ProxyFile(ctx context.Context, storageKey string) (io.ReadCloser, string, int64, error) {
 	return s.oss.GetObject(ctx, storageKey)
+}
+
+// ResolvePublicFile returns a file record by direct-link path segments.
+func (s *FileService) ResolvePublicFile(ctx context.Context, userIDStr, filename string) (*model.File, error) {
+	return s.repos.Files.FindByStorageKey(ctx, userIDStr+"/"+filename)
+}
+
+// SubmitAppeal creates an appeal ticket for a banned file.
+func (s *FileService) SubmitAppeal(ctx context.Context, fileID, userID uuid.UUID, reason string) (*model.FileAppeal, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, fmt.Errorf("申诉理由不能为空")
+	}
+	if len([]rune(reason)) > 1000 {
+		return nil, fmt.Errorf("申诉理由不能超过 1000 字")
+	}
+
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if file.UserID != userID {
+		return nil, fmt.Errorf("permission denied")
+	}
+	if file.ModerationStatus != "banned" {
+		return nil, fmt.Errorf("该文件当前未被封禁")
+	}
+
+	if _, err := s.repos.FileAppeals.FindPendingByFileID(ctx, fileID); err == nil {
+		return nil, fmt.Errorf("该文件已有待处理申诉，请勿重复提交")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	appeal := &model.FileAppeal{
+		FileID: fileID,
+		UserID: userID,
+		Status: "pending",
+		Reason: reason,
+	}
+	if err := s.repos.FileAppeals.Create(ctx, appeal); err != nil {
+		return nil, err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "file_appeal_submitted",
+		Resource:   "file",
+		ResourceID: &fileID,
+		Details: map[string]any{
+			"reason": reason,
+		},
+	})
+
+	return appeal, nil
 }
 
 // generateStorageKey creates a random storage key for a file.

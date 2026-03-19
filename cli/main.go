@@ -92,6 +92,7 @@ func runLogs() {
 }
 
 const envFile = "/etc/ideasaver/.env"
+const binaryFile = "/data/ideasaver/ideasaver"
 
 func handleConfig() {
 	if len(os.Args) < 3 {
@@ -176,7 +177,7 @@ func handleDB() {
 
 	switch os.Args[2] {
 	case "migrate":
-		cmd := exec.Command("/opt/ideasaver/ideasaver", "migrate")
+		cmd := exec.Command(binaryFile, "migrate")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -187,7 +188,7 @@ func handleDB() {
 	case "status":
 		fmt.Println("Checking migration status...")
 		// Simple check: try to connect and verify tables exist
-		cmd := exec.Command("/opt/ideasaver/ideasaver", "migrate")
+		cmd := exec.Command(binaryFile, "migrate")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		_ = cmd.Run()

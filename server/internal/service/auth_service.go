@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
@@ -17,23 +18,38 @@ import (
 
 // AuthService handles OAuth2 authentication with Authelia.
 type AuthService struct {
-	cfg      *config.Config
-	userRepo *repository.UserRepository
-	oauth2   *oauth2.Config
+	cfg         *config.Config
+	userRepo    *repository.UserRepository
+	oauth2      *oauth2.Config
+	userInfoURL string
 }
 
 func NewAuthService(cfg *config.Config, userRepo *repository.UserRepository) *AuthService {
+	authURL := cfg.OIDCAuthURL
+	if authURL == "" {
+		authURL = cfg.AutheliaIssuer + "/api/oidc/authorization"
+	}
+	tokenURL := cfg.OIDCTokenURL
+	if tokenURL == "" {
+		tokenURL = cfg.AutheliaIssuer + "/api/oidc/token"
+	}
+	userInfoURL := cfg.OIDCUserInfoURL
+	if userInfoURL == "" {
+		userInfoURL = cfg.AutheliaIssuer + "/api/oidc/userinfo"
+	}
+
 	return &AuthService{
-		cfg:      cfg,
-		userRepo: userRepo,
+		cfg:         cfg,
+		userRepo:    userRepo,
+		userInfoURL: userInfoURL,
 		oauth2: &oauth2.Config{
 			ClientID:     cfg.AutheliaClientID,
 			ClientSecret: cfg.AutheliaClientSecret,
 			RedirectURL:  cfg.AutheliaRedirectURL,
-			Scopes:       []string{"openid", "profile", "email", "groups"},
+			Scopes:       parseOIDCScopes(cfg.OIDCScopes),
 			Endpoint: oauth2.Endpoint{
-				AuthURL:  cfg.AutheliaIssuer + "/api/oidc/authorization",
-				TokenURL: cfg.AutheliaIssuer + "/api/oidc/token",
+				AuthURL:  authURL,
+				TokenURL: tokenURL,
 			},
 		},
 	}
@@ -54,7 +70,7 @@ func (s *AuthService) ExchangeCode(ctx context.Context, code string) (string, *m
 
 	// Get userinfo from Authelia
 	client := s.oauth2.Client(ctx, token)
-	resp, err := client.Get(s.cfg.AutheliaIssuer + "/api/oidc/userinfo")
+	resp, err := client.Get(s.userInfoURL)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get userinfo: %w", err)
 	}
@@ -129,4 +145,29 @@ func (s *AuthService) generateJWT(user *model.User) (string, error) {
 // GetUser retrieves a user by ID.
 func (s *AuthService) GetUser(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	return s.userRepo.FindByID(ctx, id)
+}
+
+// UserRepo exposes user repository for auth middleware wiring.
+func (s *AuthService) UserRepo() *repository.UserRepository {
+	return s.userRepo
+}
+
+func parseOIDCScopes(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{"openid", "profile", "email", "groups"}
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	scopes := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			scopes = append(scopes, p)
+		}
+	}
+	if len(scopes) == 0 {
+		return []string{"openid", "profile", "email", "groups"}
+	}
+	return scopes
 }

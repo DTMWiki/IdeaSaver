@@ -1,0 +1,13 @@
+.share-access-container {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--color-bg-base);
+}
+
+.share-card {
+    border-radius: var(--border-radius) !important;
+    box-shadow: 0 4px 24px var(--color-shadow) !important;
+}

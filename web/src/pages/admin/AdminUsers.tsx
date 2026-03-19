@@ -1,0 +1,135 @@
+import { useEffect, useState } from 'react'
+import { Table, Button, Typography, Empty, App, Pagination, InputNumber, Modal, Tag, Space } from 'antd'
+import { EditOutlined } from '@ant-design/icons'
+import type { User } from '@/types'
+import { listUsers, updateUserQuota } from '@/api/admin'
+import { formatBytes, formatDate } from '@/utils/format'
+
+const { Title, Text } = Typography
+
+export default function AdminUsers() {
+    const [users, setUsers] = useState<User[]>([])
+    const [total, setTotal] = useState(0)
+    const [loading, setLoading] = useState(true)
+    const [page, setPage] = useState(1)
+    const pageSize = 50
+    const { message } = App.useApp()
+
+    // Quota edit
+    const [editUser, setEditUser] = useState<User | null>(null)
+    const [quotaGB, setQuotaGB] = useState<number>(5)
+
+    const fetchUsers = async (p: number) => {
+        setLoading(true)
+        try {
+            const data = await listUsers((p - 1) * pageSize, pageSize)
+            setUsers(data.users)
+            setTotal(data.total)
+            setPage(p)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    useEffect(() => { fetchUsers(1) }, [])
+
+    const openQuotaEdit = (user: User) => {
+        setEditUser(user)
+        setQuotaGB(Math.round(user.storage_quota / (1024 * 1024 * 1024)))
+    }
+
+    const handleUpdateQuota = async () => {
+        if (!editUser) return
+        const quotaBytes = quotaGB * 1024 * 1024 * 1024
+        try {
+            await updateUserQuota(editUser.id, quotaBytes)
+            message.success('配额已更新')
+            setEditUser(null)
+            fetchUsers(page)
+        } catch {
+            message.error('更新失败')
+        }
+    }
+
+    const columns = [
+        { title: '用户名', dataIndex: 'username', key: 'username', width: 140 },
+        { title: '显示名', dataIndex: 'display_name', key: 'display_name', ellipsis: true },
+        { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
+        {
+            title: '角色',
+            dataIndex: 'role',
+            key: 'role',
+            width: 80,
+            render: (role: string) => role === 'admin' ? <Tag color="gold">管理员</Tag> : <Tag>用户</Tag>,
+        },
+        {
+            title: '存储配额',
+            key: 'quota',
+            width: 180,
+            render: (_: unknown, record: User) => {
+                const percent = record.storage_quota > 0 ? Math.round((record.storage_used / record.storage_quota) * 100) : 0
+                return (
+                    <Text style={{ fontSize: 13 }}>
+                        {formatBytes(record.storage_used)} / {formatBytes(record.storage_quota)} ({percent}%)
+                    </Text>
+                )
+            },
+        },
+        {
+            title: '注册时间',
+            dataIndex: 'created_at',
+            key: 'created_at',
+            width: 160,
+            render: (date: string) => formatDate(date),
+        },
+        {
+            title: '操作',
+            key: 'actions',
+            width: 100,
+            render: (_: unknown, record: User) => (
+                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openQuotaEdit(record)}>
+                    配额
+                </Button>
+            ),
+        },
+    ]
+
+    return (
+        <div className="fade-in">
+            <Title level={4} style={{ marginBottom: 16 }}>用户管理</Title>
+            <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)' }}>
+                <Table dataSource={users} columns={columns} rowKey="id" loading={loading} pagination={false} locale={{ emptyText: <Empty description="暂无用户" /> }} />
+            </div>
+            {total > pageSize && (
+                <div style={{ textAlign: 'center', marginTop: 16 }}>
+                    <Pagination current={page} total={total} pageSize={pageSize} onChange={fetchUsers} showTotal={(t) => `共 ${t} 个用户`} />
+                </div>
+            )}
+
+            {/* Quota Edit Modal */}
+            <Modal
+                title={`调整配额 — ${editUser?.username}`}
+                open={!!editUser}
+                onOk={handleUpdateQuota}
+                onCancel={() => setEditUser(null)}
+                okText="保存"
+                cancelText="取消"
+            >
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Text>当前已使用: {editUser ? formatBytes(editUser.storage_used) : '-'}</Text>
+                    <div>
+                        <Text style={{ display: 'block', marginBottom: 4 }}>存储配额 (GB)</Text>
+                        <InputNumber
+                            min={1}
+                            max={1024}
+                            value={quotaGB}
+                            onChange={(v) => setQuotaGB(v || 5)}
+                            addonAfter="GB"
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+                </Space>
+            </Modal>
+        </div>
+    )
+}

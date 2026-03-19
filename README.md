@@ -1,6 +1,7 @@
 <p align="center">
   <h1 align="center">📦 IdeaSaver</h1>
   <p align="center">DTMWiki 文件上传分发平台</p>
+  <p align="center"><a href="./README.en.md">English</a> | 中文（默认）</p>
 </p>
 
 <p align="center">
@@ -27,16 +28,19 @@ IdeaSaver 是由 DTMWiki 开发的轻量级文件上传分发平台。用户通�
 - 🔗 **直链生成** — 上传完成后自动生成直链 URL 和 Markdown 引用
 - 🗑️ **回收站** — 误删文件可恢复，30天自动清理
 - 📤 **分享链接** — 带密码/有效期的分享短链
+- 🚫 **资源封禁与申诉** — 管理员可封禁文件，用户可提交申诉，管理员复审通过或彻底删除
 
 ### 视频管理
 - 🎬 **视频上传** — 视频文件自动上传到多吉云视频云
-- ▶️ **播放地址** — 上传完成后获取视频播放地址
+- ▶️ **播放地址** — 转码完成后自动获取播放信息（支持回调刷新）
+- 📺 **Web 播放器** — 优先使用 DogeCloud JS Player（`vcode + userId`），失败自动降级原生播放器
 - ⚙️ **视频管理** — 启用/禁用/删除/批量删除视频
 
 ### 管理功能
 - 🔐 **Authelia OAuth2** — 统一登录认证
 - 👥 **权限管理** — 管理员/普通用户角色
 - 📊 **审计日志** — 所有操作留有日志
+- 🧾 **申诉工单** — 封禁资源支持工单复审与处理意见记录
 - 💾 **存储配额** — 管理员可管理用户存储配额
 
 ### 系统特性
@@ -86,7 +90,11 @@ IdeaSaver/
 ├── deploy/              # 部署配置
 │   ├── nginx/           # Nginx 配置
 │   └── systemd/         # systemd 服务
+├── .github/             # GitHub 模板与 CI
+├── go.mod
+├── go.sum
 ├── README.md
+├── README.en.md
 ├── LICENSE
 ├── .gitignore
 └── Makefile
@@ -96,7 +104,7 @@ IdeaSaver/
 
 ### 环境要求
 
-- Go 1.22+
+- Go 1.23+
 - Node.js 20+
 - PostgreSQL 15+
 - Nginx
@@ -139,6 +147,14 @@ make build-web      # 仅构建前端
 4. 配置 Nginx 反向代理
 5. 执行数据库迁移
 6. 启动服务
+
+## 仓库治理与发布规范
+
+- GitHub 分支保护（新界面 Rulesets）：[deploy/github-rulesets.md](deploy/github-rulesets.md)
+- 发布规范（分支流、门禁、打标、Hotfix）：[deploy/release-policy.md](deploy/release-policy.md)
+- 服务器发布清单：[deploy/release-checklist.md](deploy/release-checklist.md)
+- 回滚预案：[deploy/rollback-plan.md](deploy/rollback-plan.md)
+- 手动验收脚本：[deploy/manual-acceptance.md](deploy/manual-acceptance.md)
 
 ## CLI 工具
 

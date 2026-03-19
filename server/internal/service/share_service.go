@@ -42,6 +42,9 @@ func (s *ShareService) CreateShare(ctx context.Context, userID uuid.UUID, req *C
 	if file.UserID != userID {
 		return nil, fmt.Errorf("permission denied")
 	}
+	if file.ModerationStatus == "banned" {
+		return nil, fmt.Errorf("该文件已被封禁，无法创建分享")
+	}
 
 	code := generateShareCode()
 
@@ -91,6 +94,9 @@ func (s *ShareService) AccessShare(ctx context.Context, code, password string) (
 	if err != nil {
 		return nil, fmt.Errorf("文件不存在")
 	}
+	if file.ModerationStatus == "banned" {
+		return nil, fmt.Errorf("该分享资源已被封禁")
+	}
 
 	return file, nil
 }
@@ -102,6 +108,13 @@ func (s *ShareService) ListShares(ctx context.Context, userID uuid.UUID) ([]mode
 
 // DeleteShare removes a share link.
 func (s *ShareService) DeleteShare(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
+	share, err := s.repos.Shares.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if share.UserID != userID {
+		return fmt.Errorf("permission denied")
+	}
 	return s.repos.Shares.Delete(ctx, id)
 }
 

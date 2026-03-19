@@ -1,18 +1,23 @@
 package storage
 
 import (
-	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // VCloudClient wraps DogeCloud Video Cloud REST API.
@@ -23,13 +28,32 @@ type VCloudClient struct {
 	httpClient *http.Client
 }
 
+type vodUploadInfo struct {
+	DID        string `json:"did"`
+	Key        string `json:"key"`
+	S3Bucket   string `json:"s3Bucket"`
+	S3Endpoint string `json:"s3Endpoint"`
+}
+
+type VideoInfo struct {
+	VCode             string
+	PlayerUserID      string
+	PlayURL           string
+	ThumbnailURL      string
+	ThumbnailSmallURL string
+}
+
 // NewVCloudClient creates a new DogeCloud VCloud API client.
 func NewVCloudClient(cfg *config.Config) *VCloudClient {
+	apiBase := cfg.DogeVCloudAPI
+	if strings.TrimSpace(apiBase) == "" {
+		apiBase = dogeDefaultAPIServer
+	}
 	return &VCloudClient{
-		apiBase:    cfg.DogeVCloudAPI,
+		apiBase:    strings.TrimRight(apiBase, "/"),
 		accessKey:  cfg.DogeAccessKey,
 		secretKey:  cfg.DogeSecretKey,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -88,12 +112,16 @@ func (c *VCloudClient) doRequest(method, path string, body string) (map[string]a
 }
 
 // UploadVideo uploads a video file to DogeCloud VCloud.
-// It first gets temporary credentials, then uploads using multipart.
+// It first gets temporary credentials + VodUploadInfo, uploads via S3, then reports completion.
 func (c *VCloudClient) UploadVideo(title string, fileReader io.Reader, filename string, fileSize int64, callbackString string) (string, error) {
-	// Step 1: Get temporary upload credentials
+	// Step 1: Get temporary upload credentials and VOD upload info.
 	bodyJSON, _ := json.Marshal(map[string]any{
 		"channel": "VOD_UPLOAD",
-		"scopes":  []string{"*"},
+		"vodConfig": map[string]any{
+			"filename":       filename,
+			"vn":             title,
+			"callbackString": callbackString,
+		},
 	})
 
 	result, err := c.doRequest("POST", "/auth/tmp_token.json", string(bodyJSON))
@@ -106,78 +134,77 @@ func (c *VCloudClient) UploadVideo(title string, fileReader io.Reader, filename 
 		return "", fmt.Errorf("unexpected response format")
 	}
 
-	credentials, ok := data["Credentials"].(map[string]any)
+	credMap, ok := data["Credentials"].(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("missing credentials in response")
 	}
 
-	accessKeyID := credentials["accessKeyId"].(string)
-	secretAccessKey := credentials["secretAccessKey"].(string)
-	sessionToken := credentials["sessionToken"].(string)
-
-	// Step 2: Upload the video using DogeCloud upload API
-	// For server-side uploads, we use the direct upload endpoint
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	_ = writer.WriteField("accessKeyId", accessKeyID)
-	_ = writer.WriteField("secretAccessKey", secretAccessKey)
-	_ = writer.WriteField("sessionToken", sessionToken)
-	_ = writer.WriteField("callbackString", callbackString)
-	_ = writer.WriteField("vn", title)
-
-	part, err := writer.CreateFormFile("file", filename)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(part, fileReader); err != nil {
-		return "", err
-	}
-	writer.Close()
-
-	uploadURL := "https://vod-api.dogecloud.com/upload/put.json"
-	req, err := http.NewRequest("POST", uploadURL, &buf)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	accessKeyID, _ := credMap["accessKeyId"].(string)
+	secretAccessKey, _ := credMap["secretAccessKey"].(string)
+	sessionToken, _ := credMap["sessionToken"].(string)
+	if accessKeyID == "" || secretAccessKey == "" || sessionToken == "" {
+		return "", fmt.Errorf("missing temporary credentials fields")
 	}
 
-	var uploadResult map[string]any
-	if err := json.Unmarshal(respBody, &uploadResult); err != nil {
-		return "", fmt.Errorf("failed to parse upload response: %w", err)
-	}
-
-	if code, ok := uploadResult["code"].(float64); ok && code != 200 {
-		return "", fmt.Errorf("upload failed with code %d", int(code))
-	}
-
-	// Extract video ID
-	uploadData, ok := uploadResult["data"].(map[string]any)
+	vodInfoRaw, ok := data["VodUploadInfo"].(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("unexpected upload response format")
+		return "", fmt.Errorf("missing VodUploadInfo in response")
+	}
+	vodInfo := vodUploadInfo{
+		DID:        asString(vodInfoRaw["did"]),
+		Key:        asString(vodInfoRaw["key"]),
+		S3Bucket:   asString(vodInfoRaw["s3Bucket"]),
+		S3Endpoint: normalizeEndpointURL(asString(vodInfoRaw["s3Endpoint"])),
+	}
+	if vodInfo.DID == "" || vodInfo.Key == "" || vodInfo.S3Bucket == "" || vodInfo.S3Endpoint == "" {
+		return "", fmt.Errorf("incomplete VodUploadInfo in response")
 	}
 
-	vid, ok := uploadData["vid"].(string)
-	if !ok {
-		// Try float64 format
-		if vidFloat, ok := uploadData["vid"].(float64); ok {
-			vid = fmt.Sprintf("%.0f", vidFloat)
-		} else {
-			return "", fmt.Errorf("missing vid in upload response")
-		}
+	// Step 2: Upload video content to S3 endpoint with temporary credentials.
+	region := "automatic"
+	if parsed, ok := extractRegionFromEndpoint(vodInfo.S3Endpoint); ok {
+		region = parsed
 	}
 
+	resolver := aws.EndpointResolverWithOptionsFunc(
+		func(service, region string, options ...any) (aws.Endpoint, error) {
+			return aws.Endpoint{URL: vodInfo.S3Endpoint}, nil
+		},
+	)
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion(region),
+		awsconfig.WithEndpointResolverWithOptions(resolver),
+		awsconfig.WithCredentialsProvider(
+			awscreds.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, sessionToken),
+		),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to init S3 config: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+
+	putInput := &s3.PutObjectInput{
+		Bucket: aws.String(vodInfo.S3Bucket),
+		Key:    aws.String(vodInfo.Key),
+		Body:   fileReader,
+	}
+	if fileSize > 0 {
+		putInput.ContentLength = aws.Int64(fileSize)
+	}
+
+	if _, err := s3Client.PutObject(context.Background(), putInput); err != nil {
+		return "", fmt.Errorf("failed to upload video to S3: %w", err)
+	}
+
+	// Step 3: Report upload completion and get video ID.
+	vid, err := c.completeUpload(vodInfo.DID)
+	if err != nil {
+		return "", err
+	}
 	return vid, nil
 }
 
@@ -185,6 +212,49 @@ func (c *VCloudClient) UploadVideo(title string, fileReader io.Reader, filename 
 func (c *VCloudClient) GetVideoStreams(vcode string) (map[string]any, error) {
 	path := fmt.Sprintf("/video/streams.json?vcode=%s&platform=pch5", vcode)
 	return c.doRequest("GET", path, "")
+}
+
+// GetBestPlayURL tries to extract a direct playable URL from streams response.
+func (c *VCloudClient) GetBestPlayURL(vcode string) (string, error) {
+	streams, err := c.GetVideoStreams(vcode)
+	if err != nil {
+		return "", err
+	}
+
+	data, ok := streams["data"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("video/streams missing data")
+	}
+
+	return extractPlayURL(data), nil
+}
+
+// GetVideoInfo fetches video metadata such as vcode and player userId by vid.
+func (c *VCloudClient) GetVideoInfo(vid string) (*VideoInfo, error) {
+	path := fmt.Sprintf("/video/info.json?vid=%s", url.QueryEscape(strings.TrimSpace(vid)))
+	result, err := c.doRequest("GET", path, "")
+	if err != nil {
+		return nil, err
+	}
+
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("video/info missing data")
+	}
+
+	info := &VideoInfo{
+		VCode:             asString(data["vcode"]),
+		PlayURL:           extractPlayURL(data),
+		ThumbnailURL:      asString(data["thumbnail"]),
+		ThumbnailSmallURL: asString(data["thumbnail_small"]),
+	}
+	info.PlayerUserID = firstNonEmptyString(
+		asString(data["userId"]),
+		asString(data["userid"]),
+		asString(data["uid"]),
+		playerUserIDFromURL(info.PlayURL),
+	)
+	return info, nil
 }
 
 // ListVideos lists videos from DogeCloud.
@@ -210,4 +280,117 @@ func (c *VCloudClient) DeleteVideos(vids []string) error {
 	})
 	_, err := c.doRequest("POST", "/vod/video/delete.json", string(bodyJSON))
 	return err
+}
+
+func (c *VCloudClient) completeUpload(did string) (string, error) {
+	if strings.TrimSpace(did) == "" {
+		return "", fmt.Errorf("missing did")
+	}
+
+	u := c.apiBase + "/callback/upload.json?did=" + url.QueryEscape(did)
+	resp, err := c.httpClient.Get(u)
+	if err != nil {
+		return "", fmt.Errorf("failed to report upload callback: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", fmt.Errorf("failed to parse callback response: %w (body: %s)", err, string(raw))
+	}
+	if code, ok := payload["code"].(float64); ok && int(code) != 200 {
+		return "", fmt.Errorf("callback/upload failed: %v", payload["msg"])
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("callback/upload missing data")
+	}
+	vid := asString(data["vid"])
+	if vid == "" {
+		return "", fmt.Errorf("callback/upload missing vid")
+	}
+	return vid, nil
+}
+
+func (c *VCloudClient) BuildPlayerMP4URL(vcode, playerUserID string) string {
+	vcode = strings.TrimSpace(vcode)
+	playerUserID = strings.TrimSpace(playerUserID)
+	if vcode == "" || playerUserID == "" {
+		return ""
+	}
+	base := strings.TrimRight(c.apiBase, "/")
+	return fmt.Sprintf("%s/player/get.mp4?vcode=%s&userId=%s", base, url.QueryEscape(vcode), url.QueryEscape(playerUserID))
+}
+
+func extractPlayURL(data map[string]any) string {
+	if data == nil {
+		return ""
+	}
+
+	for _, key := range []string{"play_url", "playUrl", "url"} {
+		if v := strings.TrimSpace(asString(data[key])); v != "" {
+			return v
+		}
+	}
+
+	if streams, ok := data["streams"].([]any); ok {
+		for _, item := range streams {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"play_url", "playUrl", "url"} {
+				if v := strings.TrimSpace(asString(m[key])); v != "" {
+					return v
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func playerUserIDFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	return firstNonEmptyString(q.Get("userId"), q.Get("userid"), q.Get("uid"))
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func asString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return fmt.Sprintf("%.0f", t)
+	case int64:
+		return fmt.Sprintf("%d", t)
+	case int:
+		return fmt.Sprintf("%d", t)
+	default:
+		return ""
+	}
 }
