@@ -54,34 +54,38 @@ type Share struct {
 
 // UploadTask represents a chunked upload task for resumable uploads.
 type UploadTask struct {
-	ID             uuid.UUID `json:"id" db:"id"`
-	UserID         uuid.UUID `json:"user_id" db:"user_id"`
-	Filename       string    `json:"filename" db:"filename"`
-	TotalSize      int64     `json:"total_size" db:"total_size"`
-	UploadedSize   int64     `json:"uploaded_size" db:"uploaded_size"`
-	ChunkSize      int       `json:"chunk_size" db:"chunk_size"`
-	TotalChunks    int       `json:"total_chunks" db:"total_chunks"`
-	UploadedChunks int       `json:"uploaded_chunks" db:"uploaded_chunks"`
-	StorageKey     string    `json:"storage_key" db:"storage_key"`
-	UploadID       string    `json:"upload_id" db:"upload_id"`     // S3 multipart upload ID
-	Status         string    `json:"status" db:"status"`           // pending/uploading/paused/completed/failed
-	TargetType     string    `json:"target_type" db:"target_type"` // file/video
-	CreatedAt      time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
+	ID             uuid.UUID         `json:"id" db:"id"`
+	UserID         uuid.UUID         `json:"user_id" db:"user_id"`
+	Filename       string            `json:"filename" db:"filename"`
+	TotalSize      int64             `json:"total_size" db:"total_size"`
+	UploadedSize   int64             `json:"uploaded_size" db:"uploaded_size"`
+	ChunkSize      int               `json:"chunk_size" db:"chunk_size"`
+	TotalChunks    int               `json:"total_chunks" db:"total_chunks"`
+	UploadedChunks int               `json:"uploaded_chunks" db:"uploaded_chunks"`
+	StorageKey     string            `json:"storage_key" db:"storage_key"`
+	UploadID       string            `json:"upload_id" db:"upload_id"`     // S3 multipart upload ID
+	PartETags      map[string]string `json:"-" db:"part_etags"`            // part_number -> etag
+	Status         string            `json:"status" db:"status"`           // pending/uploading/paused/completed/failed
+	TargetType     string            `json:"target_type" db:"target_type"` // file/video
+	CreatedAt      time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at" db:"updated_at"`
 }
 
 // Video represents a video managed via DogeCloud VCloud.
 type Video struct {
-	ID        uuid.UUID `json:"id" db:"id"`
-	UserID    uuid.UUID `json:"user_id" db:"user_id"`
-	Title     string    `json:"title" db:"title"`
-	VID       string    `json:"vid" db:"vid"`       // DogeCloud video ID
-	VCode     string    `json:"vcode" db:"vcode"`   // DogeCloud video code
-	Status    int16     `json:"status" db:"status"` // 0=disabled 1=enabled
-	PlayURL   string    `json:"play_url,omitempty" db:"play_url"`
-	Size      int64     `json:"size" db:"size"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID                uuid.UUID `json:"id" db:"id"`
+	UserID            uuid.UUID `json:"user_id" db:"user_id"`
+	Title             string    `json:"title" db:"title"`
+	VID               string    `json:"vid" db:"vid"`     // DogeCloud video ID
+	VCode             string    `json:"vcode" db:"vcode"` // DogeCloud video code
+	PlayerUserID      string    `json:"player_user_id,omitempty" db:"player_user_id"`
+	ThumbnailURL      string    `json:"thumbnail_url,omitempty" db:"thumbnail_url"`
+	ThumbnailSmallURL string    `json:"thumbnail_small_url,omitempty" db:"thumbnail_small_url"`
+	Status            int16     `json:"status" db:"status"` // 0=disabled 1=enabled
+	PlayURL           string    `json:"play_url,omitempty" db:"play_url"`
+	Size              int64     `json:"size" db:"size"`
+	CreatedAt         time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // AuditLog represents an audit log entry.

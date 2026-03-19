@@ -17,7 +17,7 @@
 ## 2. 回滚应用
 
 - 恢复上一个稳定版二进制：
-  - `cp /opt/ideasaver/releases/<previous>/ideasaver /opt/ideasaver/ideasaver`
+  - `cp /data/ideasaver/releases/<previous>/ideasaver /data/ideasaver/ideasaver`
 - 恢复上一个稳定版前端静态资源目录。
 
 ## 3. 数据处理策略

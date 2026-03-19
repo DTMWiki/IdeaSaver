@@ -1,25 +1,115 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination } from 'antd'
+import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert } from 'antd'
 import {
     UploadOutlined,
     PlayCircleOutlined,
     DeleteOutlined,
-    VideoCameraOutlined,
 } from '@ant-design/icons'
 import { useVideoStore } from '@/stores/videoStore'
-import { getPlayURL } from '@/api/videos'
+import { getPlayInfo, type VideoPlayInfo } from '@/api/videos'
 import { formatBytes, formatDate } from '@/utils/format'
+import VideoThumbnail from '@/components/VideoThumbnail'
 
 const { Title, Text } = Typography
+
+const DOGE_PLAYER_SCRIPT = '/vendor/dogeplayer-loader.js'
+let dogePlayerLoader: Promise<void> | null = null
+
+function loadDogePlayerScript() {
+    if (dogePlayerLoader) return dogePlayerLoader
+    dogePlayerLoader = new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[src="${DOGE_PLAYER_SCRIPT}"]`) as HTMLScriptElement | null
+        if (existing) {
+            if ((window as any).DogePlayer || (window as any).DogeCloudPlayer) {
+                resolve()
+                return
+            }
+            existing.addEventListener('load', () => resolve())
+            existing.addEventListener('error', () => reject(new Error('加载 DogePlayer 脚本失败')))
+            return
+        }
+
+        const script = document.createElement('script')
+        script.src = DOGE_PLAYER_SCRIPT
+        script.async = true
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
+        document.head.appendChild(script)
+    })
+    return dogePlayerLoader
+}
 
 export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, uploadVideo, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const playerContainerRef = useRef<HTMLDivElement>(null)
     const { message, modal } = App.useApp()
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-    const [playUrl, setPlayUrl] = useState<string | null>(null)
+    const [playInfo, setPlayInfo] = useState<VideoPlayInfo | null>(null)
+    const [useNativePlayer, setUseNativePlayer] = useState(true)
+    const [sdkError, setSdkError] = useState<string | null>(null)
 
     useEffect(() => { fetchVideos(1) }, [])
+
+    useEffect(() => {
+        if (!playInfo || !playInfo.ready) return
+
+        const vcode = playInfo.vcode?.trim()
+        const playerUserID = firstNonEmptyString(
+            playInfo.player_user_id,
+            playerUserIDFromPlayURL(playInfo.play_url),
+        )
+        const playerUserIDNum = Number(playerUserID)
+        if (!vcode || !playerUserID || Number.isNaN(playerUserIDNum) || playerUserIDNum <= 0) {
+            setUseNativePlayer(true)
+            return
+        }
+
+        let disposed = false
+        let playerInstance: any = null
+        setSdkError(null)
+
+        loadDogePlayerScript()
+            .then(() => {
+                if (disposed) return
+                const DogePlayer = (window as any).DogePlayer || (window as any).DogeCloudPlayer
+                if (!DogePlayer || !playerContainerRef.current) {
+                    setUseNativePlayer(true)
+                    setSdkError('DogePlayer SDK 未注入，已切换为原生播放器')
+                    return
+                }
+
+                try {
+                    playerContainerRef.current.innerHTML = ''
+                    playerInstance = new DogePlayer({
+                        container: playerContainerRef.current,
+                        vcode,
+                        userId: playerUserIDNum,
+                        autoPlay: true,
+                    })
+                    setUseNativePlayer(false)
+                } catch {
+                    setUseNativePlayer(true)
+                    setSdkError('DogePlayer 初始化失败，已切换为原生播放器')
+                }
+            })
+            .catch(() => {
+                if (!disposed) {
+                    setUseNativePlayer(true)
+                    setSdkError('加载 DogePlayer 失败，已切换为原生播放器')
+                }
+            })
+
+        return () => {
+            disposed = true
+            if (playerInstance && typeof playerInstance.destroy === 'function') {
+                playerInstance.destroy()
+            }
+            if (playerContainerRef.current) {
+                playerContainerRef.current.innerHTML = ''
+            }
+        }
+    }, [playInfo])
 
     const handleUpload = () => fileInputRef.current?.click()
 
@@ -37,8 +127,16 @@ export default function VideoPage() {
 
     const handlePlay = async (id: string) => {
         try {
-            const url = await getPlayURL(id)
-            setPlayUrl(url)
+            const info = await getPlayInfo(id)
+            if (!info.ready) {
+                message.info(info.message || '视频仍在转码处理中，请稍后重试')
+                return
+            }
+            if (!info.play_url) {
+                message.error('视频播放信息不完整，请稍后重试')
+                return
+            }
+            setPlayInfo(info)
         } catch {
             message.error('获取播放地址失败')
         }
@@ -96,6 +194,15 @@ export default function VideoPage() {
                                 <Card
                                     hoverable
                                     style={{ borderColor: selectedIds.has(video.id) ? '#1677ff' : undefined }}
+                                    cover={
+                                        <VideoThumbnail
+                                            src={video.thumbnail_small_url || video.thumbnail_url}
+                                            alt={video.title}
+                                            height={160}
+                                            borderRadius={0}
+                                            iconSize={30}
+                                        />
+                                    }
                                     onClick={() => toggleSelect(video.id)}
                                     actions={[
                                         <Button type="text" icon={<PlayCircleOutlined />} onClick={(e) => { e.stopPropagation(); handlePlay(video.id) }} key="play">
@@ -114,7 +221,6 @@ export default function VideoPage() {
                                     ]}
                                 >
                                     <Card.Meta
-                                        avatar={<VideoCameraOutlined style={{ fontSize: 24, color: '#eb2f96' }} />}
                                         title={
                                             <Text ellipsis={{ tooltip: video.title }} style={{ maxWidth: 180 }}>
                                                 {video.title}
@@ -151,22 +257,67 @@ export default function VideoPage() {
 
             <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={handleFileSelect} />
 
-            {/* Play Modal */}
             <Modal
                 title="视频播放"
-                open={!!playUrl}
-                onCancel={() => setPlayUrl(null)}
+                open={!!playInfo}
+                onCancel={() => {
+                    setPlayInfo(null)
+                    setUseNativePlayer(true)
+                    setSdkError(null)
+                }}
                 footer={null}
-                width={720}
+                width={820}
                 destroyOnClose
             >
-                {playUrl && (
-                    <video controls autoPlay style={{ width: '100%', maxHeight: '60vh' }}>
-                        <source src={playUrl} />
-                        您的浏览器不支持视频播放
-                    </video>
+                {playInfo && (
+                    <>
+                        {sdkError && (
+                            <Alert
+                                type="warning"
+                                showIcon
+                                style={{ marginBottom: 12 }}
+                                message={sdkError}
+                            />
+                        )}
+                        {!useNativePlayer && playInfo.vcode && playInfo.player_user_id ? (
+                            <div
+                                ref={playerContainerRef}
+                                style={{ width: '100%', minHeight: 420, background: '#000' }}
+                            />
+                        ) : (
+                            <video controls autoPlay style={{ width: '100%', maxHeight: '70vh' }}>
+                                <source src={playInfo.play_url} />
+                                您的浏览器不支持视频播放
+                            </video>
+                        )}
+                    </>
                 )}
             </Modal>
         </div>
     )
+}
+
+function firstNonEmptyString(...values: Array<string | undefined>) {
+    for (const value of values) {
+        const v = value?.trim()
+        if (v) {
+            return v
+        }
+    }
+    return ''
+}
+
+function playerUserIDFromPlayURL(raw?: string) {
+    const value = raw?.trim()
+    if (!value) return ''
+    try {
+        const u = new URL(value)
+        return firstNonEmptyString(
+            u.searchParams.get('userId') ?? '',
+            u.searchParams.get('userid') ?? '',
+            u.searchParams.get('uid') ?? '',
+        )
+    } catch {
+        return ''
+    }
 }

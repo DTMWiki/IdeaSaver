@@ -24,13 +24,13 @@
 ## 3. 停机与部署
 
 - `sudo systemctl stop ideasaver`
-- 替换后端二进制到部署目录（如 `/opt/ideasaver/ideasaver`）。
+- 替换后端二进制到部署目录（如 `/data/ideasaver/ideasaver`）。
 - 替换前端静态资源（如 `web/dist` 到 Nginx/服务目录）。
 
 ## 4. 数据迁移
 
 - 执行迁移：
-  - `/opt/ideasaver/ideasaver migrate`
+  - `/data/ideasaver/ideasaver migrate`
 - 确认迁移成功后再启动服务。
 
 ## 5. 启动与验证

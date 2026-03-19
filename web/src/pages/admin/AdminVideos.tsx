@@ -4,6 +4,7 @@ import { DeleteOutlined } from '@ant-design/icons'
 import type { Video } from '@/types'
 import { listAllVideos, adminDeleteVideo } from '@/api/admin'
 import { formatBytes, formatDate } from '@/utils/format'
+import VideoThumbnail from '@/components/VideoThumbnail'
 
 const { Title } = Typography
 
@@ -36,7 +37,28 @@ export default function AdminVideos() {
     }
 
     const columns = [
-        { title: '标题', dataIndex: 'title', key: 'title', ellipsis: true },
+        {
+            title: '视频',
+            dataIndex: 'title',
+            key: 'title',
+            render: (_: string, record: Video) => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                    <VideoThumbnail
+                        src={record.thumbnail_small_url || record.thumbnail_url}
+                        alt={record.title}
+                        width={96}
+                        height={54}
+                        borderRadius={10}
+                        iconSize={20}
+                    />
+                    <div style={{ minWidth: 0, fontWeight: 500 }} title={record.title}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {record.title}
+                        </div>
+                    </div>
+                </div>
+            ),
+        },
         {
             title: '用户',
             dataIndex: 'user_id',

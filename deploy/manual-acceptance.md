@@ -35,7 +35,15 @@
 - `file_appeal_submitted`
 - `file_appeal_approved` 或 `file_appeal_deleted`
 
-## 5. 回归检查
+## 5. 视频链路验收（DogeCloud）
+
+1. 上传 1 个测试视频，确认前端提示“等待转码”。  
+2. 在 DogeCloud 控制台确认回调地址为 `https://<你的域名>/api/videos/callback/transcode`。  
+3. 观察后端日志，确认收到 `msg=transcode` 回调且接口返回 `DogeCloud Callback Success`。  
+4. 回到视频列表点击播放，确认可正常播放（优先 DogePlayer，失败时自动降级原生播放器）。  
+5. 若转码失败，页面应提示“转码处理中/失败”而非空白弹窗。  
+
+## 6. 回归检查
 
 1. 普通文件上传、分享、回收站恢复功能无回归。  
 2. 管理员用户配额调整功能正常。  

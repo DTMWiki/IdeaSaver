@@ -13,9 +13,9 @@
 ## 1. 创建系统用户
 
 ```bash
-sudo useradd -r -s /usr/sbin/nologin -d /opt/ideasaver ideasaver
-sudo mkdir -p /opt/ideasaver /etc/ideasaver
-sudo chown ideasaver:ideasaver /opt/ideasaver
+sudo useradd -r -s /usr/sbin/nologin -d /data/ideasaver ideasaver
+sudo mkdir -p /data/ideasaver /etc/ideasaver
+sudo chown ideasaver:ideasaver /data/ideasaver
 ```
 
 ## 2. 构建项目
@@ -39,9 +39,9 @@ npm install && npm run build
 ## 3. 上传文件到服务器
 
 ```bash
-scp server/ideasaver user@server:/opt/ideasaver/
+scp server/ideasaver user@server:/data/ideasaver/
 scp cli/ideactl user@server:/usr/local/bin/
-scp -r web/dist user@server:/opt/ideasaver/web/
+scp -r web/dist user@server:/data/ideasaver/web/
 ```
 
 如果你使用源码包上传，可先在本地执行：
@@ -64,6 +64,15 @@ sudo cp server/.env.example /etc/ideasaver/.env
 sudo chmod 600 /etc/ideasaver/.env
 sudo chown ideasaver:ideasaver /etc/ideasaver/.env
 sudo nano /etc/ideasaver/.env   # 填入实际配置
+```
+
+说明：对于 DogeCloud OSS，后端会优先使用临时密钥 API 返回的 `s3Bucket/s3Endpoint`；`.env` 中的 `IDEASAVER_DOGE_BUCKET` 与 `IDEASAVER_DOGE_ENDPOINT` 作为回退值。
+
+如果你使用 DogeCloud JS 播放 SDK，建议额外设置（可选）：
+
+```env
+# 固定 DogeCloud 用户 ID（用于 SDK userId 兜底）
+IDEASAVER_DOGE_USER_ID=123456
 ```
 
 ## 6. 执行数据库迁移
@@ -119,6 +128,42 @@ curl -s https://i.dtmwiki.cn/api/auth/login | jq  # 验证 API 可达
 bash deploy/scripts/smoke_test.sh                  # 执行冒烟脚本
 ```
 
+如果你使用 Authentik，请在 `.env` 额外设置（覆盖默认 Authelia 路径）：
+
+```env
+IDEASAVER_OIDC_AUTH_URL=https://auth.example.com/application/o/authorize/
+IDEASAVER_OIDC_TOKEN_URL=https://auth.example.com/application/o/token/
+IDEASAVER_OIDC_USERINFO_URL=https://auth.example.com/application/o/userinfo/
+IDEASAVER_OIDC_SCOPES=openid,profile,email
+```
+
+## 11. 配置 DogeCloud 转码回调
+
+在 DogeCloud 控制台全局上传设置中，将回调地址指向：
+
+```text
+https://i.dtmwiki.cn/api/videos/callback/transcode
+```
+
+后端已兼容 `GET/POST`，支持下列字段：
+
+- `msg`：`upload` / `transcode` / `transcode_failed` / `blocked`
+- `vid`：视频 ID
+- `vcode`：视频 VCode（可选但建议传）
+- `callbackString`：上传时传入的业务透传值
+
+回调接口成功响应必须包含精确字符串：
+
+```text
+DogeCloud Callback Success
+```
+
+可用以下命令做一次本地联调：
+
+```bash
+curl -i "https://i.dtmwiki.cn/api/videos/callback/transcode?msg=transcode&vid=123456&vcode=testvcode&callbackString=user:test"
+```
+
 ## DogeCloud 配置探测（可选）
 
 如果你需要核对 DogeCloud 返回的临时三段式凭证、`VodUploadInfo`、以及接口返回中的 `endpoint/bucket`，可执行：
@@ -126,7 +171,9 @@ bash deploy/scripts/smoke_test.sh                  # 执行冒烟脚本
 ```bash
 python3 deploy/scripts/doge_probe.py \
   --access-id "<你的 AccessID>" \
-  --secret-key "<你的 Key>"
+  --secret-key "<你的 Key>" \
+  --bucket-name "dtm-ideasaver" \
+  --vod-name "ideasaver-probe.mp4"
 ```
 
 脚本会调用 `/auth/tmp_token.json`（`OSS_FULL` 与 `VOD_UPLOAD` 两种 channel）并打印完整返回与提取字段。

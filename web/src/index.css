@@ -35,8 +35,10 @@
   --transition-normal: 0.25s ease;
   --transition-slow: 0.35s ease;
 
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
   /* Font */
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.6;
   color: var(--color-text-primary);

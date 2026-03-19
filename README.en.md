@@ -24,7 +24,8 @@ Users log in via Authelia OAuth2, upload resources, and get direct URLs or Markd
 ### Video Management
 
 - Video upload to DogeCloud VCloud
-- Playback URL retrieval
+- Playback info retrieval after transcode callback
+- Web playback via DogeCloud JS Player (`vcode + userId`) with native `<video>` fallback
 - Video enable/disable/delete
 
 ### Admin

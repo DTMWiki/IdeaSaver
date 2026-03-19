@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
@@ -18,6 +20,22 @@ type VideoService struct {
 	repos  *repository.Repositories
 	vcloud *storage.VCloudClient
 	sse    *SSEService
+}
+
+type VideoCallbackPayload struct {
+	Msg          string
+	VID          string
+	VCode        string
+	PlayerUserID string
+	Callback     string // callbackString
+}
+
+type VideoPlayInfo struct {
+	Ready        bool   `json:"ready"`
+	PlayURL      string `json:"play_url,omitempty"`
+	VCode        string `json:"vcode,omitempty"`
+	PlayerUserID string `json:"player_user_id,omitempty"`
+	Message      string `json:"message,omitempty"`
 }
 
 func NewVideoService(cfg *config.Config, repos *repository.Repositories, vcloud *storage.VCloudClient, sse *SSEService) *VideoService {
@@ -41,6 +59,19 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 		Size:   size,
 	}
 
+	// Best-effort preload: fetch vcode/userId and possibly play URL immediately.
+	if info, err := s.vcloud.GetVideoInfo(vid); err == nil && info != nil {
+		video.VCode = firstNonEmptyTrim(info.VCode, video.VCode)
+		video.PlayerUserID = firstNonEmptyTrim(info.PlayerUserID, video.PlayerUserID)
+		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
+		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
+		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
+	}
+	video.PlayerUserID = firstNonEmptyTrim(video.PlayerUserID, playerUserIDFromURL(video.PlayURL), s.cfg.DogeUserID)
+	if strings.TrimSpace(video.PlayURL) == "" {
+		video.PlayURL = s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID)
+	}
+
 	if err := s.repos.Videos.Create(ctx, video); err != nil {
 		return nil, err
 	}
@@ -49,32 +80,61 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 }
 
 // HandleCallback processes DogeCloud upload/transcode callback.
-func (s *VideoService) HandleCallback(ctx context.Context, msg, vid, callback string) error {
+func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallbackPayload) error {
+	vid := strings.TrimSpace(payload.VID)
+	if vid == "" {
+		return fmt.Errorf("missing vid in callback")
+	}
+
 	video, err := s.repos.Videos.FindByVID(ctx, vid)
 	if err != nil {
 		return fmt.Errorf("video not found: %w", err)
 	}
 
-	if msg == "upload" || msg == "transcode" {
-		// Get playback URL
-		streams, err := s.vcloud.GetVideoStreams(video.VCode)
-		if err == nil {
-			if data, ok := streams["data"].(map[string]any); ok {
-				if playURL, ok := data["play_url"].(string); ok {
-					_ = s.repos.Videos.UpdatePlayURL(ctx, vid, playURL)
+	msg := strings.TrimSpace(payload.Msg)
 
-					// Notify user via SSE
-					s.sse.SendToUser(video.UserID, SSEEvent{
-						Type: "video_ready",
-						Data: map[string]any{
-							"video_id": video.ID,
-							"title":    video.Title,
-							"play_url": playURL,
-						},
-					})
-				}
-			}
-		}
+	// Callback may carry vcode / userId.
+	video.VCode = firstNonEmptyTrim(payload.VCode, video.VCode)
+	video.PlayerUserID = firstNonEmptyTrim(payload.PlayerUserID, video.PlayerUserID, s.cfg.DogeUserID)
+	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "")
+
+	video, _ = s.refreshPlaybackMeta(ctx, video)
+
+	eventType := "video_status_update"
+	switch msg {
+	case "upload":
+		eventType = "video_upload_complete"
+	case "transcode":
+		eventType = "video_transcode_complete"
+	case "transcode_failed":
+		eventType = "video_transcode_failed"
+	case "blocked":
+		eventType = "video_blocked"
+	}
+	s.sse.SendToUser(video.UserID, SSEEvent{
+		Type: eventType,
+		Data: map[string]any{
+			"video_id":        video.ID,
+			"title":           video.Title,
+			"play_url":        video.PlayURL,
+			"vcode":           video.VCode,
+			"player_user_id":  video.PlayerUserID,
+			"callback_msg":    msg,
+			"callback_string": strings.TrimSpace(payload.Callback),
+		},
+	})
+	if msg == "transcode" {
+		// Backward compatibility for old listeners.
+		s.sse.SendToUser(video.UserID, SSEEvent{
+			Type: "video_ready",
+			Data: map[string]any{
+				"video_id":       video.ID,
+				"title":          video.Title,
+				"play_url":       video.PlayURL,
+				"vcode":          video.VCode,
+				"player_user_id": video.PlayerUserID,
+			},
+		})
 	}
 
 	return nil
@@ -144,32 +204,93 @@ func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, u
 	return s.repos.Videos.BatchDelete(ctx, ids)
 }
 
-// GetPlayURL returns the playback URL for a video.
-func (s *VideoService) GetPlayURL(ctx context.Context, id uuid.UUID, userID uuid.UUID) (string, error) {
+func (s *VideoService) GetPlayInfo(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*VideoPlayInfo, error) {
 	video, err := s.repos.Videos.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if video.UserID != userID {
+		return nil, fmt.Errorf("permission denied")
+	}
+
+	video, _ = s.refreshPlaybackMeta(ctx, video)
+
+	info := &VideoPlayInfo{
+		Ready:        strings.TrimSpace(video.PlayURL) != "",
+		PlayURL:      strings.TrimSpace(video.PlayURL),
+		VCode:        strings.TrimSpace(video.VCode),
+		PlayerUserID: strings.TrimSpace(video.PlayerUserID),
+	}
+	if !info.Ready {
+		info.Message = "视频仍在转码处理中，请稍后重试"
+	}
+	return info, nil
+}
+
+// GetPlayURL returns a playable URL for backward compatibility.
+func (s *VideoService) GetPlayURL(ctx context.Context, id uuid.UUID, userID uuid.UUID) (string, error) {
+	info, err := s.GetPlayInfo(ctx, id, userID)
 	if err != nil {
 		return "", err
 	}
-	if video.UserID != userID {
-		return "", fmt.Errorf("permission denied")
+	if strings.TrimSpace(info.PlayURL) == "" {
+		return "", fmt.Errorf("播放地址尚未就绪")
+	}
+	return info.PlayURL, nil
+}
+
+func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Video) (*model.Video, error) {
+	if video == nil {
+		return nil, fmt.Errorf("nil video")
 	}
 
-	if video.PlayURL != "" {
-		return video.PlayURL, nil
+	// 1) Pull metadata by VID.
+	if info, err := s.vcloud.GetVideoInfo(video.VID); err == nil && info != nil {
+		video.VCode = firstNonEmptyTrim(info.VCode, video.VCode)
+		video.PlayerUserID = firstNonEmptyTrim(info.PlayerUserID, video.PlayerUserID)
+		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
+		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
+		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
 	}
 
-	// Try to fetch from DogeCloud
-	if video.VCode != "" {
-		streams, err := s.vcloud.GetVideoStreams(video.VCode)
-		if err == nil {
-			if data, ok := streams["data"].(map[string]any); ok {
-				if playURL, ok := data["play_url"].(string); ok {
-					_ = s.repos.Videos.UpdatePlayURL(ctx, video.VID, playURL)
-					return playURL, nil
-				}
-			}
+	// 2) Try streams API by vcode for direct play URL.
+	if strings.TrimSpace(video.PlayURL) == "" && strings.TrimSpace(video.VCode) != "" {
+		if playURL, err := s.vcloud.GetBestPlayURL(video.VCode); err == nil {
+			video.PlayURL = firstNonEmptyTrim(playURL, video.PlayURL)
 		}
 	}
+	video.PlayerUserID = firstNonEmptyTrim(video.PlayerUserID, playerUserIDFromURL(video.PlayURL), s.cfg.DogeUserID)
 
-	return "", fmt.Errorf("播放地址尚未就绪")
+	// 3) Fallback player mp4 endpoint (vcode + userId).
+	if strings.TrimSpace(video.PlayURL) == "" {
+		video.PlayURL = firstNonEmptyTrim(video.PlayURL, s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID))
+	}
+
+	if err := s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, video.PlayURL, video.ThumbnailURL, video.ThumbnailSmallURL); err != nil {
+		return nil, err
+	}
+	return video, nil
+}
+
+func firstNonEmptyTrim(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func playerUserIDFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	return firstNonEmptyTrim(q.Get("userId"), q.Get("userid"), q.Get("uid"))
 }
