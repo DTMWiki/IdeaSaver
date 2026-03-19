@@ -6,12 +6,23 @@ export interface VideoPlayInfo {
     play_url?: string
     vcode?: string
     player_user_id?: string
+    transcode_status: 'pending' | 'processing' | 'ready' | 'failed' | 'blocked'
     message?: string
+}
+
+export interface VideoUploadProgress {
+    percent: number
+    phase: 'uploading' | 'processing'
+}
+
+export interface UploadVideoOptions {
+    onProgress?: (progress: VideoUploadProgress) => void
 }
 
 export async function uploadVideo(
     file: File,
     title?: string,
+    options?: UploadVideoOptions,
 ): Promise<Video> {
     const formData = new FormData()
     formData.append('file', file)
@@ -20,7 +31,16 @@ export async function uploadVideo(
     const { data } = await client.post('/videos/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300000, // 5 min for large videos
+        onUploadProgress: (event) => {
+            if (!event.total || !options?.onProgress) return
+            const percent = Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+            options.onProgress({
+                percent,
+                phase: event.loaded >= event.total ? 'processing' : 'uploading',
+            })
+        },
     })
+    options?.onProgress?.({ percent: 100, phase: 'processing' })
     return data.video
 }
 

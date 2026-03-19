@@ -203,22 +203,24 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 			})
 		}
 		if err := s.oss.CompleteMultipartUpload(ctx, task.StorageKey, task.UploadID, parts); err != nil {
+			_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
 			return nil, fmt.Errorf("failed to complete multipart upload: %w", err)
 		}
 	}
 
-	// Mark task as completed
-	_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "completed")
-
 	// Create file record
-	ext := filepath.Ext(task.Filename)
+	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parentID, task.Filename, nil)
+	if err != nil {
+		return nil, err
+	}
+	ext := strings.ToLower(filepath.Ext(task.Filename))
 	mimeType := getMimeType(ext)
 	publicURL := fmt.Sprintf("%s/s/%s/%s", s.cfg.PublicBaseURL, userID.String(), filepath.Base(task.StorageKey))
 
 	file := &model.File{
 		UserID:           userID,
 		ParentID:         parentID,
-		Name:             task.Filename,
+		Name:             name,
 		StorageKey:       task.StorageKey,
 		MimeType:         mimeType,
 		Size:             task.TotalSize,
@@ -227,11 +229,13 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	}
 
 	if err := s.repos.Files.Create(ctx, file); err != nil {
+		_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
 		return nil, err
 	}
 
 	// Update storage used
 	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, task.TotalSize)
+	_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "completed")
 
 	// Push SSE event
 	s.sse.SendToUser(userID, SSEEvent{

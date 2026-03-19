@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { VideoCameraOutlined } from '@ant-design/icons'
 
 interface VideoThumbnailProps {
@@ -18,14 +18,11 @@ export default function VideoThumbnail({
     borderRadius = 12,
     iconSize = 28,
 }: VideoThumbnailProps) {
-    const normalizedSrc = src?.trim()
-    const [loaded, setLoaded] = useState(false)
-    const [failed, setFailed] = useState(!normalizedSrc)
-
-    useEffect(() => {
-        setLoaded(false)
-        setFailed(!normalizedSrc)
-    }, [normalizedSrc])
+    const normalizedSrc = normalizeThumbnailURL(src)
+    const [loadedSrc, setLoadedSrc] = useState('')
+    const [failedSrc, setFailedSrc] = useState('')
+    const loaded = normalizedSrc !== '' && loadedSrc === normalizedSrc
+    const failed = !normalizedSrc || failedSrc === normalizedSrc
 
     return (
         <div
@@ -57,10 +54,10 @@ export default function VideoThumbnail({
                     src={normalizedSrc}
                     alt={alt}
                     loading="lazy"
-                    onLoad={() => setLoaded(true)}
+                    onLoad={() => setLoadedSrc(normalizedSrc)}
                     onError={() => {
-                        setFailed(true)
-                        setLoaded(false)
+                        setFailedSrc(normalizedSrc)
+                        setLoadedSrc('')
                     }}
                     style={{
                         position: 'absolute',
@@ -75,4 +72,13 @@ export default function VideoThumbnail({
             )}
         </div>
     )
+}
+
+function normalizeThumbnailURL(src?: string) {
+    const value = src?.trim()
+    if (!value) return ''
+    if (value.startsWith('//')) {
+        return `https:${value}`
+    }
+    return value
 }

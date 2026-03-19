@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/DTMWiki/IdeaSaver/server/internal/model"
+)
 
 func TestPlayerUserIDFromURL(t *testing.T) {
 	t.Parallel()
@@ -41,5 +45,26 @@ func TestPlayerUserIDFromURL(t *testing.T) {
 				t.Fatalf("playerUserIDFromURL(%q) = %q, want %q", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMergeVideoStatusDoesNotAutoReadyWithoutCallback(t *testing.T) {
+	t.Parallel()
+
+	got := mergeVideoStatus(videoTranscodeProcessing, 10)
+	if got != videoTranscodeProcessing {
+		t.Fatalf("mergeVideoStatus() = %q, want %q", got, videoTranscodeProcessing)
+	}
+}
+
+func TestPlaybackMessageForReadyWithoutPlayableSource(t *testing.T) {
+	t.Parallel()
+
+	message := playbackMessage(&model.Video{
+		TranscodeStatus:  videoTranscodeReady,
+		TranscodeMessage: "",
+	})
+	if message != "已收到转码成功回调，正在同步播放信息" {
+		t.Fatalf("playbackMessage() = %q", message)
 	}
 }

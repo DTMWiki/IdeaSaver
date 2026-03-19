@@ -12,25 +12,40 @@ interface FilePreviewProps {
 }
 
 export default function FilePreview({ file, onClose }: FilePreviewProps) {
-    const [textContent, setTextContent] = useState<string | null>(null)
+    const [textPreview, setTextPreview] = useState<{ fileId: string; content: string | null }>({ fileId: '', content: null })
     const [loading, setLoading] = useState(false)
+    const textContent = file && textPreview.fileId === file.id ? textPreview.content : null
 
     useEffect(() => {
         if (!file || file.is_directory) return
-        setTextContent(null)
+        if (!isText(file.mime_type)) return
 
-        if (isText(file.mime_type)) {
+        let cancelled = false
+        const fileID = file.id
+
+        async function loadPreview() {
             setLoading(true)
-            fetch(getPreviewURL(file.id))
-                .then((r) => r.text())
-                .then((text) => {
-                    setTextContent(text)
+            try {
+                const response = await fetch(getPreviewURL(fileID))
+                const text = await response.text()
+                if (!cancelled) {
+                    setTextPreview({ fileId: fileID, content: text })
+                }
+            } catch {
+                if (!cancelled) {
+                    setTextPreview({ fileId: fileID, content: '无法加载文件内容' })
+                }
+            } finally {
+                if (!cancelled) {
                     setLoading(false)
-                })
-                .catch(() => {
-                    setTextContent('无法加载文件内容')
-                    setLoading(false)
-                })
+                }
+            }
+        }
+
+        void loadPreview()
+
+        return () => {
+            cancelled = true
         }
     }, [file])
 

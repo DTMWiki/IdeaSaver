@@ -98,9 +98,29 @@ func scanAuditLogs(rows *sql.Rows, total int) ([]model.AuditLog, int, error) {
 	for rows.Next() {
 		var l model.AuditLog
 		var detailsJSON []byte
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Resource, &l.ResourceID,
-			&detailsJSON, &l.IPAddress, &l.UserAgent, &l.CreatedAt, &l.Username); err != nil {
+		var userID sql.NullString
+		var resource sql.NullString
+		var resourceID sql.NullString
+		var ipAddress sql.NullString
+		var userAgent sql.NullString
+		var username sql.NullString
+		if err := rows.Scan(&l.ID, &userID, &l.Action, &resource, &resourceID,
+			&detailsJSON, &ipAddress, &userAgent, &l.CreatedAt, &username); err != nil {
 			return nil, 0, err
+		}
+		if userID.Valid {
+			if parsed, err := uuid.Parse(userID.String); err == nil {
+				l.UserID = parsed
+			}
+		}
+		l.Resource = resource.String
+		l.IPAddress = ipAddress.String
+		l.UserAgent = userAgent.String
+		l.Username = username.String
+		if resourceID.Valid {
+			if parsed, err := uuid.Parse(resourceID.String); err == nil {
+				l.ResourceID = &parsed
+			}
 		}
 		if detailsJSON != nil {
 			_ = json.Unmarshal(detailsJSON, &l.Details)

@@ -10,7 +10,7 @@ interface VideoState {
     pageSize: number
 
     fetchVideos: (page?: number) => Promise<void>
-    uploadVideo: (file: File, title?: string) => Promise<void>
+    uploadVideo: (file: File, title?: string, options?: videosApi.UploadVideoOptions) => Promise<void>
     toggleStatus: (id: string, currentStatus: number) => Promise<void>
     deleteVideo: (id: string) => Promise<void>
     batchDelete: (ids: string[]) => Promise<void>
@@ -36,10 +36,10 @@ export const useVideoStore = create<VideoState>((set, get) => ({
         }
     },
 
-    uploadVideo: async (file: File, title?: string) => {
+    uploadVideo: async (file: File, title?: string, options?: videosApi.UploadVideoOptions) => {
         set({ loading: true })
         try {
-            await videosApi.uploadVideo(file, title)
+            await videosApi.uploadVideo(file, title, options)
             await get().fetchVideos(1)
         } finally {
             set({ loading: false })

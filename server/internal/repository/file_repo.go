@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
@@ -214,4 +215,27 @@ func (r *FileRepository) UpdateModeration(ctx context.Context, id uuid.UUID, sta
 		id, status, reason, adminID,
 	)
 	return err
+}
+
+func (r *FileRepository) ExistsByName(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID, name string, excludeID *uuid.UUID) (bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, nil
+	}
+
+	query := `SELECT EXISTS(
+		SELECT 1
+		FROM files
+		WHERE user_id = $1
+		  AND (($2::uuid IS NULL AND parent_id IS NULL) OR parent_id = $2)
+		  AND name = $3
+		  AND deleted_at IS NULL
+		  AND ($4::uuid IS NULL OR id <> $4)
+	)`
+
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, query, userID, parentID, name, excludeID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
