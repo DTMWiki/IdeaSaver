@@ -108,6 +108,10 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 
 	// Serve frontend static files in production
 	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/s/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		c.File("./web/dist/index.html")
 	})
 }

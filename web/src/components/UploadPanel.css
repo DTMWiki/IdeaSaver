@@ -57,6 +57,11 @@
     margin-bottom: 2px;
 }
 
+.upload-task-row > .ant-space:first-child {
+    flex: 1;
+    min-width: 0;
+}
+
 .upload-filename {
     flex: 1;
     min-width: 0;

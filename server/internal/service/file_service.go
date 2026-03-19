@@ -67,6 +67,10 @@ func (s *FileService) CreateDirectory(ctx context.Context, userID uuid.UUID, par
 	if err := s.repos.Files.Create(ctx, dir); err != nil {
 		return nil, err
 	}
+	s.logAction(ctx, userID, "create_directory", "file", &dir.ID, map[string]any{
+		"name":      dir.Name,
+		"parent_id": uuidToString(parentID),
+	})
 	return dir, nil
 }
 
@@ -83,7 +87,14 @@ func (s *FileService) Rename(ctx context.Context, fileID uuid.UUID, userID uuid.
 	if err != nil {
 		return err
 	}
-	return s.repos.Files.Rename(ctx, fileID, newName)
+	if err := s.repos.Files.Rename(ctx, fileID, newName); err != nil {
+		return err
+	}
+	s.logAction(ctx, userID, "rename", "file", &fileID, map[string]any{
+		"old_name": file.Name,
+		"new_name": newName,
+	})
+	return nil
 }
 
 // Move moves a file to a different directory.
@@ -95,7 +106,15 @@ func (s *FileService) Move(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	if file.UserID != userID {
 		return fmt.Errorf("permission denied")
 	}
-	return s.repos.Files.Move(ctx, fileID, newParentID)
+	if err := s.repos.Files.Move(ctx, fileID, newParentID); err != nil {
+		return err
+	}
+	s.logAction(ctx, userID, "move", "file", &fileID, map[string]any{
+		"name":           file.Name,
+		"from_parent_id": uuidToString(file.ParentID),
+		"to_parent_id":   uuidToString(newParentID),
+	})
+	return nil
 }
 
 // Copy copies a file (creates a new OSS object).
@@ -142,6 +161,12 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 
 	// Update storage used
 	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, src.Size)
+	s.logAction(ctx, userID, "copy", "file", &newFile.ID, map[string]any{
+		"source_file_id": src.ID.String(),
+		"source_name":    src.Name,
+		"copied_name":    newFile.Name,
+		"parent_id":      uuidToString(destParentID),
+	})
 
 	return newFile, nil
 }
@@ -155,7 +180,13 @@ func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID u
 	if file.UserID != userID {
 		return fmt.Errorf("permission denied")
 	}
-	return s.repos.Files.SoftDelete(ctx, fileID)
+	if err := s.repos.Files.SoftDelete(ctx, fileID); err != nil {
+		return err
+	}
+	s.logAction(ctx, userID, "delete", "file", &fileID, map[string]any{
+		"name": file.Name,
+	})
+	return nil
 }
 
 // Restore restores a file from trash.
@@ -167,7 +198,13 @@ func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid
 	if file.UserID != userID {
 		return fmt.Errorf("permission denied")
 	}
-	return s.repos.Files.Restore(ctx, fileID)
+	if err := s.repos.Files.Restore(ctx, fileID); err != nil {
+		return err
+	}
+	s.logAction(ctx, userID, "restore", "file", &fileID, map[string]any{
+		"name": file.Name,
+	})
+	return nil
 }
 
 // PermanentDelete permanently deletes a file and its OSS object.
@@ -190,8 +227,14 @@ func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, use
 
 	// Update storage used
 	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
-
-	return s.repos.Files.PermanentDelete(ctx, fileID)
+	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
+		return err
+	}
+	s.logAction(ctx, userID, "permanent_delete", "file", &fileID, map[string]any{
+		"name":        file.Name,
+		"storage_key": file.StorageKey,
+	})
+	return nil
 }
 
 // ListTrash lists files in the user's trash.
@@ -320,4 +363,24 @@ func ensureUniqueFileName(ctx context.Context, repo *repository.FileRepository, 
 		candidate = fmt.Sprintf("%s (%d)%s", base, index, ext)
 		index++
 	}
+}
+
+func (s *FileService) logAction(ctx context.Context, userID uuid.UUID, action, resource string, resourceID *uuid.UUID, details map[string]any) {
+	if s == nil || s.repos == nil || s.repos.AuditLogs == nil {
+		return
+	}
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     action,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Details:    details,
+	})
+}
+
+func uuidToString(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
 }

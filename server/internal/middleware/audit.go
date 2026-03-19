@@ -17,7 +17,11 @@ func Audit(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 			return
 		}
 
-		// Skip if response was an error (4xx/5xx will still be logged for security)
+		// Only keep successful business operations in user history.
+		if c.Writer.Status() >= 400 {
+			return
+		}
+
 		user := GetUser(c)
 		if user == nil {
 			return
@@ -52,9 +56,11 @@ func inferAction(c *gin.Context) string {
 	path := c.FullPath()
 	method := c.Request.Method
 
+	if path == "" || contains(path, "/admin/") {
+		return ""
+	}
+
 	switch {
-	case contains(path, "/upload") && method == "POST":
-		return "upload"
 	case contains(path, "/mkdir") && method == "POST":
 		return "create_directory"
 	case contains(path, "/rename") && method == "PUT":
@@ -67,16 +73,16 @@ func inferAction(c *gin.Context) string {
 		return "restore"
 	case contains(path, "/share") && method == "POST":
 		return "share"
+	case path == "/api/shares/:id" && method == "DELETE":
+		return "share_delete"
+	case (path == "/api/videos/:id" || path == "/api/videos/batch") && method == "DELETE":
+		return ""
 	case contains(path, "/permanent") && method == "DELETE":
 		return "permanent_delete"
 	case method == "DELETE":
 		return "delete"
-	case contains(path, "/status") && method == "PUT":
-		return "status_change"
-	case contains(path, "/quota") && method == "PUT":
-		return "quota_change"
 	default:
-		return method + " " + path
+		return ""
 	}
 }
 

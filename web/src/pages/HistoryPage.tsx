@@ -19,14 +19,19 @@ const { Title, Text } = Typography
 const ACTION_CONFIG: Record<string, { icon: ReactNode; color: string; label: string }> = {
     login: { icon: <LoginOutlined />, color: '#1677ff', label: '登录' },
     upload: { icon: <UploadOutlined />, color: '#52c41a', label: '上传' },
+    create_directory: { icon: <FileOutlined />, color: '#13c2c2', label: '新建文件夹' },
     delete: { icon: <DeleteOutlined />, color: '#ff4d4f', label: '删除' },
+    permanent_delete: { icon: <DeleteOutlined />, color: '#a8071a', label: '彻底删除' },
     rename: { icon: <EditOutlined />, color: '#faad14', label: '重命名' },
     move: { icon: <FileOutlined />, color: '#722ed1', label: '移动' },
     copy: { icon: <FileOutlined />, color: '#13c2c2', label: '复制' },
     share: { icon: <ShareAltOutlined />, color: '#eb2f96', label: '分享' },
+    share_delete: { icon: <ShareAltOutlined />, color: '#cf1322', label: '取消分享' },
     restore: { icon: <FileOutlined />, color: '#52c41a', label: '恢复' },
     video_upload: { icon: <VideoCameraOutlined />, color: '#1677ff', label: '视频上传' },
     video_delete: { icon: <VideoCameraOutlined />, color: '#ff4d4f', label: '视频删除' },
+    video_status_change: { icon: <VideoCameraOutlined />, color: '#faad14', label: '视频状态变更' },
+    file_appeal_submitted: { icon: <FileOutlined />, color: '#fa8c16', label: '提交申诉' },
 }
 
 const DEFAULT_CONFIG = { icon: <UserOutlined />, color: '#8c8c8c', label: '操作' }

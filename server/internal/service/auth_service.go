@@ -20,11 +20,12 @@ import (
 type AuthService struct {
 	cfg         *config.Config
 	userRepo    *repository.UserRepository
+	auditRepo   *repository.AuditLogRepository
 	oauth2      *oauth2.Config
 	userInfoURL string
 }
 
-func NewAuthService(cfg *config.Config, userRepo *repository.UserRepository) *AuthService {
+func NewAuthService(cfg *config.Config, userRepo *repository.UserRepository, auditRepo *repository.AuditLogRepository) *AuthService {
 	authURL := cfg.OIDCAuthURL
 	if authURL == "" {
 		authURL = cfg.AutheliaIssuer + "/api/oidc/authorization"
@@ -41,6 +42,7 @@ func NewAuthService(cfg *config.Config, userRepo *repository.UserRepository) *Au
 	return &AuthService{
 		cfg:         cfg,
 		userRepo:    userRepo,
+		auditRepo:   auditRepo,
 		userInfoURL: userInfoURL,
 		oauth2: &oauth2.Config{
 			ClientID:     cfg.AutheliaClientID,
@@ -124,6 +126,18 @@ func (s *AuthService) ExchangeCode(ctx context.Context, code string) (string, *m
 	jwtToken, err := s.generateJWT(user)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate JWT: %w", err)
+	}
+
+	if s.auditRepo != nil {
+		_ = s.auditRepo.Create(ctx, &model.AuditLog{
+			UserID:   user.ID,
+			Action:   "login",
+			Resource: "user",
+			Details: map[string]any{
+				"role":     user.Role,
+				"username": user.Username,
+			},
+		})
 	}
 
 	return jwtToken, user, nil
