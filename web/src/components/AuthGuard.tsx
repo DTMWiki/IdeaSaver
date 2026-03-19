@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
 import { Spin } from 'antd'
 import { useAuthStore } from '@/stores/authStore'
@@ -8,18 +8,15 @@ import { useAuthStore } from '@/stores/authStore'
  * Redirects to home page if not logged in.
  */
 export default function AuthGuard() {
-    const { isLoggedIn, user, fetchMe } = useAuthStore()
-    const [checking, setChecking] = useState(true)
+    const { isLoggedIn, user, loading, fetchMe } = useAuthStore()
 
     useEffect(() => {
-        if (isLoggedIn && !user) {
-            fetchMe().finally(() => setChecking(false))
-        } else {
-            setChecking(false)
+        if (isLoggedIn && !user && !loading) {
+            void fetchMe()
         }
-    }, [isLoggedIn, user, fetchMe])
+    }, [isLoggedIn, user, loading, fetchMe])
 
-    if (checking) {
+    if (isLoggedIn && (!user || loading)) {
         return (
             <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Spin size="large" tip="加载中..." />

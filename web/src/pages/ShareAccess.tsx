@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, Input, Button, Typography, Space, Spin, Result, Image } from 'antd'
 import { LockOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
@@ -17,7 +17,7 @@ export default function ShareAccess() {
     const [password, setPassword] = useState('')
     const [error, setError] = useState<string | null>(null)
 
-    const fetchShare = async (pwd?: string) => {
+    const fetchShare = useCallback(async (pwd?: string) => {
         if (!code) return
         setLoading(true)
         setError(null)
@@ -35,9 +35,9 @@ export default function ShareAccess() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [code])
 
-    useEffect(() => { fetchShare() }, [code])
+    useEffect(() => { void fetchShare() }, [fetchShare])
 
     const handleSubmitPassword = () => {
         fetchShare(password)

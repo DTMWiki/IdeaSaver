@@ -27,6 +27,24 @@ func TestExtractPlayURL(t *testing.T) {
 			want: "https://example.com/b.m3u8",
 		},
 		{
+			name: "stream fallback",
+			data: map[string]any{
+				"stream": []any{
+					map[string]any{"url": "//example.com/c.m3u8"},
+				},
+			},
+			want: "https://example.com/c.m3u8",
+		},
+		{
+			name: "backup url fallback",
+			data: map[string]any{
+				"stream": []any{
+					map[string]any{"backup_urls": []any{"https://example.com/d.m3u8"}},
+				},
+			},
+			want: "https://example.com/d.m3u8",
+		},
+		{
 			name: "missing",
 			data: map[string]any{
 				"streams": []any{},
@@ -44,6 +62,17 @@ func TestExtractPlayURL(t *testing.T) {
 				t.Fatalf("extractPlayURL() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeRemoteURL(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeRemoteURL("//cdn.example.com/thumb.jpg"); got != "https://cdn.example.com/thumb.jpg" {
+		t.Fatalf("normalizeRemoteURL() = %q", got)
+	}
+	if got := normalizeRemoteURL("https://cdn.example.com/thumb.jpg"); got != "https://cdn.example.com/thumb.jpg" {
+		t.Fatalf("normalizeRemoteURL() preserved = %q", got)
 	}
 }
 

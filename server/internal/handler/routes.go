@@ -746,7 +746,7 @@ func handleGetPlayURL(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfoForViewer(c.Request.Context(), id, user.ID, c.ClientIP(), c.Request.UserAgent())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -764,7 +764,7 @@ func handleGetPlayInfo(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		info, err := svc.Video.GetPlayInfo(c.Request.Context(), id, user.ID)
+		info, err := svc.Video.GetPlayInfoForViewer(c.Request.Context(), id, user.ID, c.ClientIP(), c.Request.UserAgent())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

@@ -121,7 +121,7 @@ async function processTask(localId: string) {
     try {
         // Step 1: Init upload on server
         let taskId = task.taskId
-        let startChunk = task.uploadedChunks
+        const startChunk = task.uploadedChunks
 
         if (!taskId) {
             const resp = await uploadApi.initUpload({

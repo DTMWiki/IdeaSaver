@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Table, Typography, Empty, Select, Pagination, Tag, Space } from 'antd'
 import type { AuditLog } from '@/types'
 import { listLogs } from '@/api/admin'
@@ -51,7 +51,7 @@ export default function AdminLogs() {
     const [actionFilter, setActionFilter] = useState('')
     const pageSize = 50
 
-    const fetchLogs = async (p: number, action?: string) => {
+    const fetchLogs = useCallback(async (p: number, action?: string) => {
         setLoading(true)
         try {
             const a = action !== undefined ? action : actionFilter
@@ -62,9 +62,9 @@ export default function AdminLogs() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [actionFilter])
 
-    useEffect(() => { fetchLogs(1) }, [])
+    useEffect(() => { void fetchLogs(1) }, [fetchLogs])
 
     const handleFilterChange = (action: string) => {
         setActionFilter(action)

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Timeline, Typography, Tag, Empty, Spin, Button, Space } from 'antd'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Timeline, Typography, Tag, Empty, Spin, Button, Space, Alert } from 'antd'
 import {
     UploadOutlined,
     DeleteOutlined,
@@ -16,7 +16,7 @@ import { formatRelativeTime, formatDate } from '@/utils/format'
 
 const { Title, Text } = Typography
 
-const ACTION_CONFIG: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+const ACTION_CONFIG: Record<string, { icon: ReactNode; color: string; label: string }> = {
     login: { icon: <LoginOutlined />, color: '#1677ff', label: '登录' },
     upload: { icon: <UploadOutlined />, color: '#52c41a', label: '上传' },
     delete: { icon: <DeleteOutlined />, color: '#ff4d4f', label: '删除' },
@@ -36,19 +36,24 @@ export default function HistoryPage() {
     const [total, setTotal] = useState(0)
     const [loading, setLoading] = useState(true)
     const [offset, setOffset] = useState(0)
+    const [error, setError] = useState('')
     const limit = 30
 
     const fetchLogs = async (newOffset: number) => {
         setLoading(true)
+        setError('')
         try {
             const data = await getHistory(newOffset, limit)
             if (newOffset === 0) {
-                setLogs(data.logs)
+                setLogs(data.logs || [])
             } else {
-                setLogs((prev) => [...prev, ...data.logs])
+                setLogs((prev) => [...prev, ...(data.logs || [])])
             }
-            setTotal(data.total)
+            setTotal(data.total || 0)
             setOffset(newOffset)
+        } catch (err: unknown) {
+            const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+            setError(message || '加载操作历史失败')
         } finally {
             setLoading(false)
         }
@@ -64,8 +69,19 @@ export default function HistoryPage() {
         <div className="fade-in">
             <Title level={4} style={{ marginBottom: 16 }}>操作历史</Title>
 
+            {error && (
+                <Alert
+                    type="error"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                    message="操作历史加载失败"
+                    description={error}
+                    action={<Button size="small" onClick={() => fetchLogs(0)}>重试</Button>}
+                />
+            )}
+
             {logs.length === 0 && !loading ? (
-                <Empty description="暂无操作记录" />
+                <Empty description={error ? '请稍后重试' : '暂无操作记录'} />
             ) : (
                 <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)', padding: 24 }}>
                     <Timeline
@@ -84,11 +100,7 @@ export default function HistoryPage() {
                                                 </Text>
                                             )}
                                         </Space>
-                                        {log.details && typeof log.details === 'object' && (
-                                            <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
-                                                {JSON.stringify(log.details)}
-                                            </Text>
-                                        )}
+                                        {renderAuditDetails(log.details)}
                                         <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
                                             {formatRelativeTime(log.created_at)} · {formatDate(log.created_at)}
                                         </Text>
@@ -116,4 +128,41 @@ export default function HistoryPage() {
             )}
         </div>
     )
+}
+
+function renderAuditDetails(details: unknown) {
+    const text = summarizeAuditDetails(details)
+    if (!text) return null
+    return (
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 2 }}>
+            {text}
+        </Text>
+    )
+}
+
+function summarizeAuditDetails(details: unknown): string {
+    if (details == null) return ''
+    if (typeof details === 'string') return details
+    if (typeof details === 'number' || typeof details === 'boolean') return String(details)
+    if (Array.isArray(details)) {
+        return details.map((item) => summarizeAuditDetails(item)).filter(Boolean).join(' | ')
+    }
+    if (typeof details === 'object') {
+        const entries = Object.entries(details as Record<string, unknown>)
+        if (entries.length === 0) return ''
+        return entries
+            .slice(0, 6)
+            .map(([key, value]) => `${key}: ${formatDetailValue(value)}`)
+            .join(' | ')
+    }
+    return ''
+}
+
+function formatDetailValue(value: unknown): string {
+    if (value == null) return '-'
+    if (typeof value === 'string') return value
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+    if (Array.isArray(value)) return value.map((item) => formatDetailValue(item)).join(', ')
+    if (typeof value === 'object') return JSON.stringify(value)
+    return String(value)
 }

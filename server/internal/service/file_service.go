@@ -53,6 +53,10 @@ func (s *FileService) ListFiles(ctx context.Context, userID uuid.UUID, parentID 
 
 // CreateDirectory creates a new directory.
 func (s *FileService) CreateDirectory(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID, name string) (*model.File, error) {
+	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parentID, name, nil)
+	if err != nil {
+		return nil, err
+	}
 	dir := &model.File{
 		UserID:           userID,
 		ParentID:         parentID,
@@ -74,6 +78,10 @@ func (s *FileService) Rename(ctx context.Context, fileID uuid.UUID, userID uuid.
 	}
 	if file.UserID != userID {
 		return fmt.Errorf("permission denied")
+	}
+	newName, err = ensureUniqueFileName(ctx, s.repos.Files, userID, file.ParentID, newName, &fileID)
+	if err != nil {
+		return err
 	}
 	return s.repos.Files.Rename(ctx, fileID, newName)
 }
@@ -110,11 +118,15 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	}
 
 	publicURL := fmt.Sprintf("%s/s/%s/%s", s.cfg.PublicBaseURL, userID.String(), filepath.Base(newKey))
+	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, destParentID, src.Name, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	newFile := &model.File{
 		UserID:           userID,
 		ParentID:         destParentID,
-		Name:             src.Name,
+		Name:             name,
 		StorageKey:       newKey,
 		IsDirectory:      src.IsDirectory,
 		MimeType:         src.MimeType,
@@ -280,4 +292,32 @@ func generateStorageKey(userID, originalName string) string {
 	randomName := hex.EncodeToString(randBytes)
 	ext := filepath.Ext(originalName)
 	return userID + "/" + randomName + ext
+}
+
+func ensureUniqueFileName(ctx context.Context, repo *repository.FileRepository, userID uuid.UUID, parentID *uuid.UUID, desired string, excludeID *uuid.UUID) (string, error) {
+	name := strings.TrimSpace(desired)
+	if name == "" {
+		return "", fmt.Errorf("名称不能为空")
+	}
+
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	ext := filepath.Ext(name)
+	if base == "" {
+		base = name
+		ext = ""
+	}
+
+	candidate := name
+	index := 2
+	for {
+		exists, err := repo.ExistsByName(ctx, userID, parentID, candidate, excludeID)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s (%d)%s", base, index, ext)
+		index++
+	}
 }

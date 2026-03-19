@@ -81,6 +81,8 @@ type Video struct {
 	PlayerUserID      string    `json:"player_user_id,omitempty" db:"player_user_id"`
 	ThumbnailURL      string    `json:"thumbnail_url,omitempty" db:"thumbnail_url"`
 	ThumbnailSmallURL string    `json:"thumbnail_small_url,omitempty" db:"thumbnail_small_url"`
+	TranscodeStatus   string    `json:"transcode_status" db:"transcode_status"` // pending|processing|ready|failed|blocked
+	TranscodeMessage  string    `json:"transcode_message,omitempty" db:"transcode_message"`
 	Status            int16     `json:"status" db:"status"` // 0=disabled 1=enabled
 	PlayURL           string    `json:"play_url,omitempty" db:"play_url"`
 	Size              int64     `json:"size" db:"size"`
