@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
+	"github.com/DTMWiki/IdeaSaver/server/internal/repository"
 	"github.com/DTMWiki/IdeaSaver/server/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -100,6 +102,8 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 		admin.PUT("/files/:id/unban", handleAdminUnbanFile(svc))
 		admin.DELETE("/files/:id", handleAdminDeleteFile(svc))
 		admin.GET("/videos", handleAdminListVideos(svc))
+		admin.GET("/videos/:id/play-info", handleAdminGetVideoPlayInfo(svc))
+		admin.PUT("/videos/:id/status", handleAdminSetVideoStatus(svc))
 		admin.DELETE("/videos/:id", handleAdminDeleteVideo(svc))
 		admin.GET("/appeals", handleAdminListAppeals(svc))
 		admin.PUT("/appeals/:id/review", handleAdminReviewAppeal(svc))
@@ -527,7 +531,7 @@ func handlePreview(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		file, err := svc.File.GetFileByID(c.Request.Context(), id, user.ID)
+		file, err := svc.File.GetFileForActor(c.Request.Context(), id, user)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
 			return
@@ -537,7 +541,21 @@ func handlePreview(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		reader, contentType, contentLength, err := svc.File.ProxyFile(c.Request.Context(), file.StorageKey)
+		thumbMode := c.Query("thumb") == "1"
+		var (
+			reader        io.ReadCloser
+			contentType   string
+			contentLength int64
+		)
+		if thumbMode {
+			if !strings.HasPrefix(strings.TrimSpace(file.MimeType), "image/") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "该文件不支持缩略图"})
+				return
+			}
+			reader, contentType, contentLength, err = svc.File.ProxyThumbnail(c.Request.Context(), file.StorageKey, "thumb")
+		} else {
+			reader, contentType, contentLength, err = svc.File.ProxyFile(c.Request.Context(), file.StorageKey)
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -561,7 +579,7 @@ func handleGetFileURL(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		url, markdown, err := svc.File.GetFileURL(c.Request.Context(), id, user.ID)
+		url, markdown, err := svc.File.GetFileURLForActor(c.Request.Context(), id, user)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1071,13 +1089,57 @@ func handleAdminListVideos(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminDeleteVideo(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
 		id, err := uuid.Parse(c.Param("id"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
 			return
 		}
-		if err := svc.Admin.DeleteVideo(c.Request.Context(), id); err != nil {
+		if err := svc.Admin.DeleteVideo(c.Request.Context(), id, admin.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+func handleAdminGetVideoPlayInfo(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
+
+		info, err := svc.Video.GetPlayInfoForActor(c.Request.Context(), id, admin, c.ClientIP(), c.Request.UserAgent())
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, info)
+	}
+}
+
+func handleAdminSetVideoStatus(svc *service.Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		admin := middleware.GetUser(c)
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的视频ID"})
+			return
+		}
+
+		var req struct {
+			Status int16 `json:"status"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := svc.Video.SetVideoStatusForActor(c.Request.Context(), id, admin, req.Status); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -1127,11 +1189,28 @@ func handleAdminReviewAppeal(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminListLogs(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		action := c.Query("action")
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		startAt, err := parseAuditLogTime(c.Query("start_at"), false)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的开始时间"})
+			return
+		}
+		endAt, err := parseAuditLogTime(c.Query("end_at"), true)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的结束时间"})
+			return
+		}
 
-		logs, total, err := svc.Admin.ListAuditLogs(c.Request.Context(), action, offset, limit)
+		filter := repository.AuditLogFilter{
+			Action:  c.Query("action"),
+			User:    c.Query("user"),
+			Keyword: c.Query("keyword"),
+			StartAt: startAt,
+			EndAt:   endAt,
+		}
+
+		logs, total, err := svc.Admin.ListAuditLogs(c.Request.Context(), filter, offset, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1192,4 +1271,35 @@ func handleAdminCleanupTrash(svc *service.Services) gin.HandlerFunc {
 
 func isImageMime(mime string) bool {
 	return len(mime) > 6 && mime[:6] == "image/"
+}
+
+func parseAuditLogTime(raw string, inclusiveEnd bool) (*time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed, nil
+	}
+
+	layouts := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.ParseInLocation(layout, value, time.Local)
+		if err != nil {
+			continue
+		}
+		if inclusiveEnd && layout == "2006-01-02" {
+			parsed = parsed.Add(24*time.Hour - time.Nanosecond)
+		}
+		return &parsed, nil
+	}
+
+	return nil, fmt.Errorf("invalid time format")
 }

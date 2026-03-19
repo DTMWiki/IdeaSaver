@@ -34,9 +34,9 @@ func (s *AdminService) ListAllVideos(ctx context.Context, offset, limit int) ([]
 	return s.repos.Videos.ListAll(ctx, offset, limit)
 }
 
-// ListAuditLogs returns audit logs with optional action filter.
-func (s *AdminService) ListAuditLogs(ctx context.Context, action string, offset, limit int) ([]model.AuditLog, int, error) {
-	return s.repos.AuditLogs.ListAll(ctx, action, offset, limit)
+// ListAuditLogs returns audit logs with optional filters.
+func (s *AdminService) ListAuditLogs(ctx context.Context, filter repository.AuditLogFilter, offset, limit int) ([]model.AuditLog, int, error) {
+	return s.repos.AuditLogs.ListAll(ctx, filter, offset, limit)
 }
 
 // ListUsers returns all users.
@@ -82,8 +82,28 @@ func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID
 }
 
 // DeleteVideo permanently deletes any video (admin).
-func (s *AdminService) DeleteVideo(ctx context.Context, videoID uuid.UUID) error {
-	return s.repos.Videos.Delete(ctx, videoID)
+func (s *AdminService) DeleteVideo(ctx context.Context, videoID, adminID uuid.UUID) error {
+	video, err := s.repos.Videos.FindByID(ctx, videoID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.repos.Videos.Delete(ctx, videoID); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     adminID,
+		Action:     "admin_video_deleted",
+		Resource:   "video",
+		ResourceID: &videoID,
+		Details: map[string]any{
+			"title":    video.Title,
+			"vid":      video.VID,
+			"owner_id": video.UserID.String(),
+		},
+	})
+	return nil
 }
 
 // CleanupTrash manually cleans up expired trash.

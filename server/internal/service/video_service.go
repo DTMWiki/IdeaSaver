@@ -301,6 +301,49 @@ func (s *VideoService) GetPlayInfo(ctx context.Context, id uuid.UUID, userID uui
 	return s.GetPlayInfoForViewer(ctx, id, userID, "", "")
 }
 
+func (s *VideoService) GetPlayInfoForActor(ctx context.Context, id uuid.UUID, actor *model.User, viewerIP, userAgent string) (*VideoPlayInfo, error) {
+	video, err := s.repos.Videos.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if actor == nil {
+		return nil, fmt.Errorf("permission denied")
+	}
+	if actor.Role != "admin" && video.UserID != actor.ID {
+		return nil, fmt.Errorf("permission denied")
+	}
+
+	video, _ = s.refreshPlaybackMeta(ctx, video, viewerIP, userAgent)
+
+	info := &VideoPlayInfo{
+		PlayURL:         strings.TrimSpace(video.PlayURL),
+		VCode:           strings.TrimSpace(video.VCode),
+		PlayerUserID:    strings.TrimSpace(video.PlayerUserID),
+		TranscodeStatus: normalizeTranscodeStatus(video.TranscodeStatus),
+	}
+	info.Ready = info.TranscodeStatus == videoTranscodeReady && canPlayVideo(video)
+	if !info.Ready {
+		info.Message = playbackMessage(video)
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     actor.ID,
+		Action:     "video_play_request",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":            video.Title,
+			"vid":              video.VID,
+			"vcode":            video.VCode,
+			"ready":            info.Ready,
+			"transcode_status": info.TranscodeStatus,
+			"owner_id":         video.UserID.String(),
+		},
+	})
+
+	return info, nil
+}
+
 func (s *VideoService) GetPlayInfoForViewer(ctx context.Context, id uuid.UUID, userID uuid.UUID, viewerIP, userAgent string) (*VideoPlayInfo, error) {
 	video, err := s.repos.Videos.FindByID(ctx, id)
 	if err != nil {
@@ -322,7 +365,61 @@ func (s *VideoService) GetPlayInfoForViewer(ctx context.Context, id uuid.UUID, u
 	if !info.Ready {
 		info.Message = playbackMessage(video)
 	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     userID,
+		Action:     "video_play_request",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":            video.Title,
+			"vid":              video.VID,
+			"vcode":            video.VCode,
+			"ready":            info.Ready,
+			"transcode_status": info.TranscodeStatus,
+		},
+	})
+
 	return info, nil
+}
+
+func (s *VideoService) SetVideoStatusForActor(ctx context.Context, id uuid.UUID, actor *model.User, status int16) error {
+	video, err := s.repos.Videos.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if actor == nil {
+		return fmt.Errorf("permission denied")
+	}
+	if actor.Role != "admin" && video.UserID != actor.ID {
+		return fmt.Errorf("permission denied")
+	}
+
+	dogeStatus := 0
+	if status == 1 {
+		dogeStatus = 1
+	}
+	if err := s.vcloud.SetVideoStatus([]string{video.VID}, dogeStatus); err != nil {
+		return fmt.Errorf("failed to update status on DogeCloud: %w", err)
+	}
+	if err := s.repos.Videos.UpdateStatus(ctx, id, status); err != nil {
+		return err
+	}
+
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:     actor.ID,
+		Action:     "video_status_change",
+		Resource:   "video",
+		ResourceID: &video.ID,
+		Details: map[string]any{
+			"title":    video.Title,
+			"vid":      video.VID,
+			"status":   status,
+			"owner_id": video.UserID.String(),
+		},
+	})
+
+	return nil
 }
 
 // GetPlayURL returns a playable URL for backward compatibility.

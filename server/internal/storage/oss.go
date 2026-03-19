@@ -32,8 +32,10 @@ const (
 
 // OSSClient wraps AWS S3 SDK for DogeCloud OSS operations.
 type OSSClient struct {
-	client *s3.Client
-	bucket string
+	client       *s3.Client
+	bucket       string
+	endpoint     string
+	usePathStyle bool
 }
 
 type dogeTmpTokenProvider struct {
@@ -149,13 +151,16 @@ func NewOSSClient(cfg *config.Config) (*OSSClient, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
+	usePathStyle := shouldUsePathStyle(endpoint)
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = shouldUsePathStyle(endpoint)
+		o.UsePathStyle = usePathStyle
 	})
 
 	return &OSSClient{
-		client: client,
-		bucket: bucket,
+		client:       client,
+		bucket:       bucket,
+		endpoint:     endpoint,
+		usePathStyle: usePathStyle,
 	}, nil
 }
 
@@ -472,6 +477,90 @@ func (c *OSSClient) GetObject(ctx context.Context, key string) (io.ReadCloser, s
 	}
 
 	return output.Body, contentType, contentLength, nil
+}
+
+func (c *OSSClient) GetStyledObject(ctx context.Context, key, style string) (io.ReadCloser, string, int64, error) {
+	style = strings.Trim(strings.TrimSpace(style), "/")
+	if style == "" {
+		return c.GetObject(ctx, key)
+	}
+
+	styledURL, err := c.buildStyledObjectURL(key, style)
+	if err != nil {
+		return nil, "", 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, styledURL, nil)
+	if err != nil {
+		return nil, "", 0, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		defer resp.Body.Close()
+		return nil, "", 0, fmt.Errorf("styled object fetch failed with status %d", resp.StatusCode)
+	}
+
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	contentLength := int64(0)
+	if value := strings.TrimSpace(resp.Header.Get("Content-Length")); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			contentLength = parsed
+		}
+	}
+
+	return resp.Body, contentType, contentLength, nil
+}
+
+func (c *OSSClient) buildStyledObjectURL(key, style string) (string, error) {
+	base, err := c.buildObjectURL(key)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(base, "/") + "/" + style, nil
+}
+
+func (c *OSSClient) buildObjectURL(key string) (string, error) {
+	if strings.TrimSpace(c.endpoint) == "" || strings.TrimSpace(c.bucket) == "" {
+		return "", fmt.Errorf("oss endpoint or bucket is empty")
+	}
+
+	u, err := url.Parse(c.endpoint)
+	if err != nil {
+		return "", err
+	}
+
+	segments := strings.Split(strings.TrimLeft(key, "/"), "/")
+	escaped := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" {
+			continue
+		}
+		escaped = append(escaped, url.PathEscape(segment))
+	}
+	objectPath := strings.Join(escaped, "/")
+
+	if c.usePathStyle {
+		u.Path = "/" + strings.Trim(c.bucket, "/")
+		if objectPath != "" {
+			u.Path += "/" + objectPath
+		}
+		return u.String(), nil
+	}
+
+	u.Host = c.bucket + "." + u.Host
+	u.Path = "/"
+	if objectPath != "" {
+		u.Path += objectPath
+	}
+	return u.String(), nil
 }
 
 // DeleteObject removes an object from OSS.

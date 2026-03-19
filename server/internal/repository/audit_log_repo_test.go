@@ -8,6 +8,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
+	"github.com/DTMWiki/IdeaSaver/server/internal/requestctx"
 	"github.com/google/uuid"
 )
 
@@ -41,6 +42,45 @@ func TestCreateTreatsEmptyIPAndUserAgentAsNull(t *testing.T) {
 	}
 
 	if err := repo.Create(context.Background(), log); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestCreateUsesRequestMetaFallback(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	repo := NewAuditLogRepository(db)
+	userID := uuid.New()
+	now := time.Now()
+	ctx := requestctx.WithMeta(context.Background(), "203.0.113.9", "UnitTest/1.0")
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO audit_logs (user_id, action, resource, resource_id, details, ip_address, user_agent)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id, created_at`)).
+		WithArgs(userID, "login", "user", nil, []byte(`{"username":"alice"}`), "203.0.113.9", "UnitTest/1.0").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(2, now))
+
+	log := &model.AuditLog{
+		UserID:   userID,
+		Action:   "login",
+		Resource: "user",
+		Details: map[string]any{
+			"username": "alice",
+		},
+	}
+
+	if err := repo.Create(ctx, log); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -114,5 +154,27 @@ func TestListByUserHandlesNullableFields(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBuildAuditLogWhereSupportsCompositeFilters(t *testing.T) {
+	t.Parallel()
+
+	startAt := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(2 * time.Hour)
+	where, args := buildAuditLogWhere(AuditLogFilter{
+		Action:  "upload",
+		User:    "akadmin",
+		Keyword: "cover",
+		StartAt: &startAt,
+		EndAt:   &endAt,
+	})
+
+	expectedWhere := " WHERE al.action = $1 AND (u.username ILIKE $2 OR CAST(al.user_id AS TEXT) ILIKE $2) AND (al.action ILIKE $3 OR COALESCE(al.resource, '') ILIKE $3 OR COALESCE(al.details::text, '') ILIKE $3 OR COALESCE(u.username, '') ILIKE $3) AND al.created_at >= $4 AND al.created_at <= $5"
+	if where != expectedWhere {
+		t.Fatalf("where = %q, want %q", where, expectedWhere)
+	}
+	if len(args) != 5 {
+		t.Fatalf("len(args) = %d, want 5", len(args))
 	}
 }
