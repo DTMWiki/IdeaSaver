@@ -43,6 +43,36 @@
   contain-intrinsic-size: 560px;
 }
 
+.file-list-container .ant-table-content {
+  overflow-x: auto;
+}
+
+.file-table-name-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.file-table-name-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.file-table-name-text {
+  display: block;
+  max-width: 100%;
+  font-weight: 600;
+}
+
+.file-table-name-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 /* Grid view */
 .file-grid {
   display: grid;
@@ -257,5 +287,31 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-toolbar {
+    padding: 12px;
+  }
+
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .file-grid-item {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .file-grid-icon {
+    height: 112px;
+    border-radius: 14px;
+  }
+
+  .file-action-button.ant-btn {
+    padding-inline: 8px;
   }
 }

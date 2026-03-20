@@ -41,6 +41,7 @@ type VideoInfo struct {
 	PlayURL           string
 	ThumbnailURL      string
 	ThumbnailSmallURL string
+	PlayCount         int64
 	Status            int
 }
 
@@ -257,6 +258,7 @@ func (c *VCloudClient) GetVideoInfo(vid string) (*VideoInfo, error) {
 		PlayURL:           normalizeRemoteURL(extractPlayURL(data)),
 		ThumbnailURL:      normalizeRemoteURL(asString(data["thumbnail"])),
 		ThumbnailSmallURL: normalizeRemoteURL(asString(data["thumbnail_small"])),
+		PlayCount:         extractPlayCount(data),
 		Status:            asInt(data["status"]),
 	}
 	info.PlayerUserID = firstNonEmptyString(
@@ -434,6 +436,53 @@ func asInt(v any) int {
 	default:
 		return 0
 	}
+}
+
+func asInt64(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return 0
+		}
+		var out int64
+		_, _ = fmt.Sscanf(t, "%d", &out)
+		return out
+	default:
+		return 0
+	}
+}
+
+func extractPlayCount(data map[string]any) int64 {
+	if data == nil {
+		return 0
+	}
+
+	for _, key := range []string{"play_count", "playCount", "view_count", "viewCount", "pv", "plays"} {
+		if value, ok := data[key]; ok {
+			if count := asInt64(value); count > 0 {
+				return count
+			}
+		}
+	}
+
+	if stats, ok := data["stats"].(map[string]any); ok {
+		for _, key := range []string{"play_count", "playCount", "view_count", "viewCount", "pv", "plays"} {
+			if value, ok := stats[key]; ok {
+				if count := asInt64(value); count > 0 {
+					return count
+				}
+			}
+		}
+	}
+
+	return 0
 }
 
 func normalizeRemoteURL(raw string) string {

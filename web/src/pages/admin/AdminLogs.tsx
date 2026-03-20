@@ -11,12 +11,16 @@ import {
   Input,
   DatePicker,
   Button,
+  Grid,
 } from "antd";
+import type { Breakpoint } from "antd";
 import type { AuditLog } from "@/types";
 import { listLogs } from "@/api/admin";
 import { formatDate } from "@/utils/format";
 
 const { Title, Text } = Typography;
+const TABLE_MD: Breakpoint[] = ["md"];
+const TABLE_LG: Breakpoint[] = ["lg"];
 
 const ACTION_OPTIONS = [
   { label: "全部", value: "" },
@@ -86,6 +90,8 @@ export default function AdminLogs() {
   const [keywordFilter, setKeywordFilter] = useState("");
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const pageSize = 50;
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const fetchLogs = useCallback(
     async (
@@ -166,6 +172,7 @@ export default function AdminLogs() {
       dataIndex: "username",
       key: "username",
       width: 180,
+      responsive: TABLE_MD,
       ellipsis: true,
       render: (_: string | undefined, record: AuditLog) =>
         record.username || record.user_id || "-",
@@ -175,6 +182,7 @@ export default function AdminLogs() {
       dataIndex: "resource",
       key: "resource",
       width: 80,
+      responsive: TABLE_LG,
       render: (resource?: string) => resource || "-",
     },
     {
@@ -198,6 +206,7 @@ export default function AdminLogs() {
       dataIndex: "ip_address",
       key: "ip_address",
       width: 150,
+      responsive: TABLE_LG,
       render: (ip: string) => ip || "-",
     },
     {
@@ -212,24 +221,17 @@ export default function AdminLogs() {
   return (
     <div className="fade-in">
       <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 16,
-          flexWrap: "wrap",
-          gap: 8,
-        }}
+        className="page-header-bar"
       >
         <Title level={4} style={{ margin: 0 }}>
           审计日志
         </Title>
-        <Space wrap>
+        <Space className="page-header-actions" wrap style={{ width: isMobile ? "100%" : undefined }}>
           <Select
             value={actionFilter}
             onChange={handleActionChange}
             options={ACTION_OPTIONS}
-            style={{ width: 140 }}
+            style={{ width: isMobile ? "100%" : 140 }}
             size="small"
             placeholder="操作类型"
           />
@@ -239,7 +241,7 @@ export default function AdminLogs() {
             placeholder="用户 / 用户ID"
             allowClear
             size="small"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? "100%" : 160 }}
             onPressEnter={handleSearch}
           />
           <Input
@@ -248,7 +250,7 @@ export default function AdminLogs() {
             placeholder="关键词"
             allowClear
             size="small"
-            style={{ width: 180 }}
+            style={{ width: isMobile ? "100%" : 180 }}
             onPressEnter={handleSearch}
           />
           <DatePicker.RangePicker
@@ -257,6 +259,7 @@ export default function AdminLogs() {
             allowClear
             showTime
             size="small"
+            style={{ width: isMobile ? "100%" : undefined }}
           />
           <Button size="small" type="primary" onClick={handleSearch}>
             查询
@@ -266,19 +269,15 @@ export default function AdminLogs() {
           </Button>
         </Space>
       </div>
-      <div
-        style={{
-          background: "var(--color-bg-container)",
-          borderRadius: "var(--border-radius)",
-          border: "1px solid var(--color-border-secondary)",
-        }}
-      >
+      <div className="page-card">
         <Table
           dataSource={logs}
           columns={columns}
           rowKey="id"
           loading={loading}
           pagination={false}
+          size={isMobile ? "small" : "middle"}
+          scroll={isMobile ? { x: 920 } : { x: 1120 }}
           locale={{ emptyText: <Empty description="暂无日志" /> }}
         />
       </div>

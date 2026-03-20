@@ -43,6 +43,7 @@ type VideoPlayInfo struct {
 	PlayURL         string `json:"play_url,omitempty"`
 	VCode           string `json:"vcode,omitempty"`
 	PlayerUserID    string `json:"player_user_id,omitempty"`
+	PlayCount       int64  `json:"play_count"`
 	TranscodeStatus string `json:"transcode_status"`
 	Message         string `json:"message,omitempty"`
 }
@@ -111,7 +112,7 @@ func (s *VideoService) HandleCallback(ctx context.Context, payload VideoCallback
 	video.PlayerUserID = firstNonEmptyTrim(s.cfg.DogeUserID, payload.PlayerUserID, video.PlayerUserID)
 	video.TranscodeStatus, video.TranscodeMessage = callbackState(msg, video.TranscodeStatus)
 
-	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "")
+	_ = s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, "", "", "", video.PlayCount)
 	_ = s.repos.Videos.UpdateTranscodeState(ctx, video.VID, video.TranscodeStatus, video.TranscodeMessage)
 
 	video, _ = s.refreshPlaybackMeta(ctx, video, "", "")
@@ -319,6 +320,7 @@ func (s *VideoService) GetPlayInfoForActor(ctx context.Context, id uuid.UUID, ac
 		PlayURL:         strings.TrimSpace(video.PlayURL),
 		VCode:           strings.TrimSpace(video.VCode),
 		PlayerUserID:    strings.TrimSpace(video.PlayerUserID),
+		PlayCount:       video.PlayCount,
 		TranscodeStatus: normalizeTranscodeStatus(video.TranscodeStatus),
 	}
 	info.Ready = info.TranscodeStatus == videoTranscodeReady && canPlayVideo(video)
@@ -359,6 +361,7 @@ func (s *VideoService) GetPlayInfoForViewer(ctx context.Context, id uuid.UUID, u
 		PlayURL:         strings.TrimSpace(video.PlayURL),
 		VCode:           strings.TrimSpace(video.VCode),
 		PlayerUserID:    strings.TrimSpace(video.PlayerUserID),
+		PlayCount:       video.PlayCount,
 		TranscodeStatus: normalizeTranscodeStatus(video.TranscodeStatus),
 	}
 	info.Ready = info.TranscodeStatus == videoTranscodeReady && canPlayVideo(video)
@@ -448,6 +451,9 @@ func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Vid
 		video.PlayURL = firstNonEmptyTrim(info.PlayURL, video.PlayURL)
 		video.ThumbnailURL = firstNonEmptyTrim(info.ThumbnailURL, video.ThumbnailURL)
 		video.ThumbnailSmallURL = firstNonEmptyTrim(info.ThumbnailSmallURL, video.ThumbnailSmallURL)
+		if info.PlayCount > 0 || video.PlayCount == 0 {
+			video.PlayCount = info.PlayCount
+		}
 		video.TranscodeStatus = mergeVideoStatus(video.TranscodeStatus, info.Status)
 	}
 
@@ -462,7 +468,7 @@ func (s *VideoService) refreshPlaybackMeta(ctx context.Context, video *model.Vid
 		video.PlayURL = firstNonEmptyTrim(video.PlayURL, s.vcloud.BuildPlayerMP4URL(video.VCode, video.PlayerUserID))
 	}
 
-	if err := s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, video.PlayURL, video.ThumbnailURL, video.ThumbnailSmallURL); err != nil {
+	if err := s.repos.Videos.UpdatePlaybackMeta(ctx, video.VID, video.VCode, video.PlayerUserID, video.PlayURL, video.ThumbnailURL, video.ThumbnailSmallURL, video.PlayCount); err != nil {
 		return nil, err
 	}
 	if err := s.repos.Videos.UpdateTranscodeState(ctx, video.VID, normalizeTranscodeStatus(video.TranscodeStatus), strings.TrimSpace(video.TranscodeMessage)); err != nil {

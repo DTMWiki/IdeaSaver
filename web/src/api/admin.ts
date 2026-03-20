@@ -55,6 +55,7 @@ export async function adminGetVideoPlayInfo(id: string): Promise<{
   play_url?: string;
   vcode?: string;
   player_user_id?: string;
+  play_count: number;
   transcode_status: string;
   message?: string;
 }> {

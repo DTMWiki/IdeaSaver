@@ -1,13 +1,14 @@
 import {
   Table,
   Checkbox,
-  Space,
   Typography,
   Button,
   Dropdown,
   Tag,
   Tooltip,
+  Grid,
 } from "antd";
+import type { Breakpoint } from "antd";
 import {
   FolderFilled,
   FileImageOutlined,
@@ -30,6 +31,8 @@ import {
 } from "@/utils/format";
 
 const { Text } = Typography;
+const TABLE_MD: Breakpoint[] = ["md"];
+const TABLE_LG: Breakpoint[] = ["lg"];
 
 interface FileTableProps {
   files: FileItem[];
@@ -63,6 +66,8 @@ export default function FileTable({
   actionItems,
 }: FileTableProps) {
   const { toggleSelect, navigateTo } = useFileStore();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const handleRowClick = (file: FileItem) => {
     if (file.is_directory) {
@@ -92,10 +97,38 @@ export default function FileTable({
       key: "name",
       ellipsis: true,
       render: (_: string, record: FileItem) => (
-        <Space>
+        <div className="file-table-name-cell">
           {getFileIcon(record)}
-          <Text ellipsis={{ tooltip: record.name }}>{record.name}</Text>
-        </Space>
+          <div className="file-table-name-content">
+            <Text className="file-table-name-text" ellipsis={{ tooltip: record.name }}>
+              {record.name}
+            </Text>
+            {isMobile && (
+              <div className="file-table-name-meta">
+                {!record.is_directory && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {formatBytes(record.size)}
+                  </Text>
+                )}
+                {!record.is_directory &&
+                  (record.moderation_status === "banned" ? (
+                    <Tooltip title={record.moderation_reason?.trim() || "管理员已封禁该文件"}>
+                      <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                        已封禁
+                      </Tag>
+                    </Tooltip>
+                  ) : (
+                    <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                      正常
+                    </Tag>
+                  ))}
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {formatDate(record.updated_at)}
+                </Text>
+              </div>
+            )}
+          </div>
+        </div>
       ),
     },
     {
@@ -103,6 +136,7 @@ export default function FileTable({
       dataIndex: "size",
       key: "size",
       width: 100,
+      responsive: TABLE_MD,
       render: (size: number, record: FileItem) =>
         record.is_directory ? "-" : formatBytes(size),
     },
@@ -111,6 +145,7 @@ export default function FileTable({
       dataIndex: "moderation_status",
       key: "moderation_status",
       width: 120,
+      responsive: TABLE_MD,
       render: (_: string, record: FileItem) => {
         if (record.is_directory) return "-";
         if (record.moderation_status === "banned") {
@@ -129,12 +164,13 @@ export default function FileTable({
       dataIndex: "updated_at",
       key: "updated_at",
       width: 160,
+      responsive: TABLE_LG,
       render: (date: string) => formatDate(date),
     },
     {
       title: "操作",
       key: "actions",
-      width: 96,
+      width: isMobile ? 52 : 96,
       align: "center" as const,
       render: (_: unknown, record: FileItem) => (
         <Dropdown
@@ -149,7 +185,7 @@ export default function FileTable({
             icon={<EllipsisOutlined />}
             onClick={(e) => e.stopPropagation()}
           >
-            操作
+            {!isMobile && "操作"}
           </Button>
         </Dropdown>
       ),
@@ -164,7 +200,8 @@ export default function FileTable({
         rowKey="id"
         loading={loading}
         pagination={false}
-        size="middle"
+        size={isMobile ? "small" : "middle"}
+        scroll={isMobile ? { x: 520 } : undefined}
         locale={{ emptyText: "此文件夹为空" }}
         onRow={(record) => ({
           onClick: () => handleRowClick(record),

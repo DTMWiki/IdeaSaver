@@ -12,7 +12,9 @@ import {
   Modal,
   Input,
   Tooltip,
+  Grid,
 } from "antd";
+import type { Breakpoint } from "antd";
 import {
   DeleteOutlined,
   StopOutlined,
@@ -34,6 +36,9 @@ import FilePreview from "@/components/FilePreview";
 import { formatBytes, formatDate, copyToClipboard } from "@/utils/format";
 
 const { Title } = Typography;
+const TABLE_MD: Breakpoint[] = ["md"];
+const TABLE_LG: Breakpoint[] = ["lg"];
+const TABLE_XL: Breakpoint[] = ["xl"];
 
 export default function AdminFiles() {
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -46,6 +51,8 @@ export default function AdminFiles() {
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const pageSize = 50;
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const fetchFiles = async (p: number) => {
     setLoading(true);
@@ -140,6 +147,7 @@ export default function AdminFiles() {
       dataIndex: "user_id",
       key: "user_id",
       width: 120,
+      responsive: TABLE_LG,
       ellipsis: true,
       render: (id: string) => id.slice(0, 8) + "...",
     },
@@ -148,6 +156,7 @@ export default function AdminFiles() {
       dataIndex: "is_directory",
       key: "type",
       width: 80,
+      responsive: TABLE_MD,
       render: (isDir: boolean) => (isDir ? "文件夹" : "文件"),
     },
     {
@@ -155,6 +164,7 @@ export default function AdminFiles() {
       dataIndex: "moderation_status",
       key: "moderation_status",
       width: 100,
+      responsive: TABLE_MD,
       render: (status: FileItem["moderation_status"], record: FileItem) => {
         if (record.is_directory) return "-";
         return status === "banned" ? (
@@ -169,6 +179,7 @@ export default function AdminFiles() {
       dataIndex: "size",
       key: "size",
       width: 100,
+      responsive: TABLE_LG,
       render: (size: number, record: FileItem) =>
         record.is_directory ? "-" : formatBytes(size),
     },
@@ -177,6 +188,7 @@ export default function AdminFiles() {
       dataIndex: "moderation_reason",
       key: "moderation_reason",
       ellipsis: true,
+      responsive: TABLE_XL,
       render: (reason?: string) =>
         reason ? <Tooltip title={reason}>{reason}</Tooltip> : "-",
     },
@@ -185,12 +197,13 @@ export default function AdminFiles() {
       dataIndex: "created_at",
       key: "created_at",
       width: 160,
+      responsive: TABLE_XL,
       render: (date: string) => formatDate(date),
     },
     {
       title: "操作",
       key: "actions",
-      width: 280,
+      width: isMobile ? 188 : 280,
       render: (_: unknown, record: FileItem) => (
         <Space size={4}>
           {!record.is_directory && (
@@ -201,7 +214,7 @@ export default function AdminFiles() {
                 icon={<EyeOutlined />}
                 onClick={() => setPreviewFile(record)}
               >
-                预览
+                {!isMobile && "预览"}
               </Button>
               <Button
                 type="text"
@@ -209,7 +222,7 @@ export default function AdminFiles() {
                 icon={<LinkOutlined />}
                 onClick={() => handleCopyLink(record)}
               >
-                直链
+                {!isMobile && "直链"}
               </Button>
               <Button
                 type="text"
@@ -217,7 +230,7 @@ export default function AdminFiles() {
                 icon={<DownloadOutlined />}
                 onClick={() => handleDownload(record)}
               >
-                下载
+                {!isMobile && "下载"}
               </Button>
             </>
           )}
@@ -230,7 +243,7 @@ export default function AdminFiles() {
                 onClick={() => handleUnban(record)}
                 loading={actionLoading}
               >
-                解封
+                {!isMobile && "解封"}
               </Button>
             ) : (
               <Button
@@ -240,7 +253,7 @@ export default function AdminFiles() {
                 icon={<StopOutlined />}
                 onClick={() => setBanTarget(record)}
               >
-                封禁
+                {!isMobile && "封禁"}
               </Button>
             ))}
           <Popconfirm
@@ -259,35 +272,26 @@ export default function AdminFiles() {
   return (
     <div className="fade-in">
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 16,
-          flexWrap: "wrap",
-        }}
+        className="page-header-bar"
       >
         <Title level={4} style={{ margin: 0 }}>
           全局文件管理
         </Title>
-        <Button icon={<ReloadOutlined />} onClick={() => fetchFiles(page)}>
-          刷新
-        </Button>
+        <div className="page-header-actions">
+          <Button icon={<ReloadOutlined />} onClick={() => fetchFiles(page)}>
+            刷新
+          </Button>
+        </div>
       </div>
-      <div
-        style={{
-          background: "var(--color-bg-container)",
-          borderRadius: "var(--border-radius)",
-          border: "1px solid var(--color-border-secondary)",
-        }}
-      >
+      <div className="page-card">
         <Table
           dataSource={files}
           columns={columns}
           rowKey="id"
           loading={loading}
           pagination={false}
+          size={isMobile ? "small" : "middle"}
+          scroll={isMobile ? { x: 900 } : { x: 1200 }}
           locale={{ emptyText: <Empty description="暂无文件" /> }}
         />
       </div>

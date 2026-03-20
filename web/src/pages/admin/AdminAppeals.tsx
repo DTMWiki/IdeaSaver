@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Table, Typography, Empty, Select, Pagination, Tag, Space, Button, App, Modal, Input, Tooltip } from 'antd'
+import { Table, Typography, Empty, Select, Pagination, Tag, Space, Button, App, Modal, Input, Tooltip, Grid } from 'antd'
+import type { Breakpoint } from 'antd'
 import type { FileAppeal } from '@/types'
 import { listAppeals, reviewAppeal } from '@/api/admin'
 import { formatDate } from '@/utils/format'
 
 const { Title, Text } = Typography
+const TABLE_MD: Breakpoint[] = ['md']
+const TABLE_LG: Breakpoint[] = ['lg']
+const TABLE_XL: Breakpoint[] = ['xl']
 
 const STATUS_OPTIONS = [
     { label: '全部', value: '' },
@@ -42,6 +46,8 @@ export default function AdminAppeals() {
     const [reviewLoading, setReviewLoading] = useState(false)
     const pageSize = 50
     const { message } = App.useApp()
+    const screens = Grid.useBreakpoint()
+    const isMobile = !screens.md
 
     const fetchData = async (p: number, status?: string) => {
         setLoading(true)
@@ -98,6 +104,7 @@ export default function AdminAppeals() {
             dataIndex: 'username',
             key: 'username',
             width: 120,
+            responsive: TABLE_MD,
             render: (username: string) => username || '-',
         },
         {
@@ -112,6 +119,7 @@ export default function AdminAppeals() {
             dataIndex: 'admin_comment',
             key: 'admin_comment',
             ellipsis: true,
+            responsive: TABLE_LG,
             render: (comment: string) => comment ? <Tooltip title={comment}>{comment}</Tooltip> : '-',
         },
         {
@@ -119,12 +127,13 @@ export default function AdminAppeals() {
             dataIndex: 'created_at',
             key: 'created_at',
             width: 170,
+            responsive: TABLE_XL,
             render: (date: string) => formatDate(date),
         },
         {
             title: '操作',
             key: 'actions',
-            width: 180,
+            width: isMobile ? 124 : 180,
             render: (_: unknown, record: FileAppeal) => (
                 record.status === 'pending' ? (
                     <Space size={4}>
@@ -133,11 +142,11 @@ export default function AdminAppeals() {
                             size="small"
                             onClick={() => {
                                 setReviewTarget(record)
-                                setReviewDecision('approve')
-                                setReviewComment('')
-                            }}
-                        >
-                            通过
+                            setReviewDecision('approve')
+                            setReviewComment('')
+                        }}
+                    >
+                            {!isMobile && '通过'}
                         </Button>
                         <Button
                             type="link"
@@ -145,11 +154,11 @@ export default function AdminAppeals() {
                             danger
                             onClick={() => {
                                 setReviewTarget(record)
-                                setReviewDecision('delete')
-                                setReviewComment('')
-                            }}
-                        >
-                            彻底删除
+                            setReviewDecision('delete')
+                            setReviewComment('')
+                        }}
+                    >
+                            {!isMobile && '彻底删除'}
                         </Button>
                     </Space>
                 ) : (
@@ -161,9 +170,9 @@ export default function AdminAppeals() {
 
     return (
         <div className="fade-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+            <div className="page-header-bar">
                 <Title level={4} style={{ margin: 0 }}>申诉工单</Title>
-                <Space>
+                <Space className="page-header-actions" wrap>
                     <Text type="secondary">状态筛选:</Text>
                     <Select
                         value={statusFilter}
@@ -178,13 +187,15 @@ export default function AdminAppeals() {
                 </Space>
             </div>
 
-            <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)' }}>
+            <div className="page-card">
                 <Table
                     dataSource={appeals}
                     columns={columns}
                     rowKey="id"
                     loading={loading}
                     pagination={false}
+                    size={isMobile ? 'small' : 'middle'}
+                    scroll={isMobile ? { x: 820 } : { x: 1040 }}
                     locale={{ emptyText: <Empty description="暂无申诉工单" /> }}
                 />
             </div>
