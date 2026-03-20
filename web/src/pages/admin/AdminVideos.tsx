@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Table,
   Button,
@@ -68,22 +68,23 @@ export default function AdminVideos() {
   const [shareAutoPlay, setShareAutoPlay] = useState(false);
   const [shareWidth, setShareWidth] = useState("");
   const [shareHeight, setShareHeight] = useState("");
+  const [keyword, setKeyword] = useState("");
 
-  const fetchVideos = async (p: number) => {
+  const fetchVideos = useCallback(async (p: number, nextKeyword = keyword) => {
     setLoading(true);
     try {
-      const data = await listAllVideos((p - 1) * pageSize, pageSize);
+      const data = await listAllVideos((p - 1) * pageSize, pageSize, nextKeyword);
       setVideos(data.videos);
       setTotal(data.total);
       setPage(p);
     } finally {
       setLoading(false);
     }
-  };
+  }, [keyword]);
 
   useEffect(() => {
-    fetchVideos(1);
-  }, []);
+    void fetchVideos(1);
+  }, [fetchVideos]);
 
   const handleDelete = async (id: string) => {
     await adminDeleteVideo(id);
@@ -224,12 +225,13 @@ export default function AdminVideos() {
     },
     {
       title: "用户",
-      dataIndex: "user_id",
-      key: "user_id",
-      width: 120,
+      dataIndex: "username",
+      key: "username",
+      width: 160,
       responsive: TABLE_LG,
       ellipsis: true,
-      render: (id: string) => id.slice(0, 8) + "...",
+      render: (_: string | undefined, record: Video) =>
+        record.username || record.user_id || "-",
     },
     {
       title: "状态",
@@ -324,9 +326,23 @@ export default function AdminVideos() {
 
   return (
     <div className="fade-in">
-      <Title level={4} style={{ marginBottom: 16 }}>
-        全局视频管理
-      </Title>
+      <div className="page-header-bar">
+        <Title level={4} style={{ margin: 0 }}>
+          全局视频管理
+        </Title>
+        <div className="page-header-actions">
+          <Input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onPressEnter={() => void fetchVideos(1, keyword)}
+            placeholder="搜索视频名 / VCode / 用户名"
+            allowClear
+            style={{ width: isMobile ? "100%" : 260 }}
+          />
+          <Button onClick={() => void fetchVideos(1, keyword)}>查询</Button>
+          <Button onClick={() => fetchVideos(page)}>刷新</Button>
+        </div>
+      </div>
       <div className="page-card">
         <Table
           dataSource={videos}
@@ -345,7 +361,7 @@ export default function AdminVideos() {
             current={page}
             total={total}
             pageSize={pageSize}
-            onChange={fetchVideos}
+            onChange={(nextPage) => void fetchVideos(nextPage)}
             showTotal={(t) => `共 ${t} 个视频`}
           />
         </div>

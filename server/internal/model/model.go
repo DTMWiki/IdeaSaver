@@ -23,6 +23,7 @@ type User struct {
 type File struct {
 	ID               uuid.UUID  `json:"id" db:"id"`
 	UserID           uuid.UUID  `json:"user_id" db:"user_id"`
+	Username         string     `json:"username,omitempty" db:"username"`
 	ParentID         *uuid.UUID `json:"parent_id" db:"parent_id"`
 	Name             string     `json:"name" db:"name"`
 	StorageKey       string     `json:"storage_key,omitempty" db:"storage_key"`
@@ -75,6 +76,7 @@ type UploadTask struct {
 type Video struct {
 	ID                uuid.UUID `json:"id" db:"id"`
 	UserID            uuid.UUID `json:"user_id" db:"user_id"`
+	Username          string    `json:"username,omitempty" db:"username"`
 	Title             string    `json:"title" db:"title"`
 	VID               string    `json:"vid" db:"vid"`     // DogeCloud video ID
 	VCode             string    `json:"vcode" db:"vcode"` // DogeCloud video code

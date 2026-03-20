@@ -15,6 +15,7 @@ export interface User {
 export interface FileItem {
     id: string
     user_id: string
+    username?: string
     parent_id: string | null
     name: string
     storage_key?: string
@@ -64,6 +65,7 @@ export interface UploadTask {
 export interface Video {
     id: string
     user_id: string
+    username?: string
     title: string
     vid: string
     vcode: string
