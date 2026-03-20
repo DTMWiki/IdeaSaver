@@ -60,6 +60,7 @@ func main() {
 	// Global middleware
 	r.Use(middleware.CORS(cfg))
 	r.Use(middleware.RateLimit(cfg))
+	r.Use(middleware.RequestMeta())
 
 	// Setup routes
 	handler.SetupRoutes(r, cfg, services)

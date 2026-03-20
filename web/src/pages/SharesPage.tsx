@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Typography, Empty, Tag, Popconfirm, App } from 'antd'
+import { Table, Button, Typography, Empty, Tag, Popconfirm, App, Grid } from 'antd'
+import type { Breakpoint } from 'antd'
 import { DeleteOutlined, CopyOutlined } from '@ant-design/icons'
 import type { Share } from '@/types'
 import { listShares, deleteShare } from '@/api/shares'
 import { formatDate, copyToClipboard } from '@/utils/format'
 
 const { Title } = Typography
+const TABLE_MD: Breakpoint[] = ['md']
+const TABLE_LG: Breakpoint[] = ['lg']
 
 export default function SharesPage() {
     const [shares, setShares] = useState<Share[]>([])
     const [loading, setLoading] = useState(true)
     const { message } = App.useApp()
+    const screens = Grid.useBreakpoint()
+    const isMobile = !screens.md
 
     const fetchShares = async () => {
         setLoading(true)
@@ -44,7 +49,7 @@ export default function SharesPage() {
             width: 140,
             render: (code: string) => (
                 <Button type="link" size="small" icon={<CopyOutlined />} onClick={() => handleCopyLink(code)}>
-                    {code}
+                    {isMobile ? '复制' : code}
                 </Button>
             ),
         },
@@ -60,12 +65,14 @@ export default function SharesPage() {
             dataIndex: 'view_count',
             key: 'view_count',
             width: 100,
+            responsive: TABLE_MD,
         },
         {
             title: '过期时间',
             dataIndex: 'expires_at',
             key: 'expires_at',
             width: 180,
+            responsive: TABLE_LG,
             render: (date: string | null) => {
                 if (!date) return <Tag color="blue">永久</Tag>
                 const expired = new Date(date) < new Date()
@@ -77,12 +84,13 @@ export default function SharesPage() {
             dataIndex: 'created_at',
             key: 'created_at',
             width: 160,
+            responsive: TABLE_LG,
             render: (date: string) => formatDate(date),
         },
         {
             title: '操作',
             key: 'actions',
-            width: 80,
+            width: 68,
             render: (_: unknown, record: Share) => (
                 <Popconfirm
                     title="删除此分享链接？"
@@ -100,13 +108,15 @@ export default function SharesPage() {
         <div className="fade-in">
             <Title level={4} style={{ marginBottom: 16 }}>我的分享</Title>
 
-            <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)' }}>
+            <div className="page-card">
                 <Table
                     dataSource={shares}
                     columns={columns}
                     rowKey="id"
                     loading={loading}
                     pagination={false}
+                    size={isMobile ? 'small' : 'middle'}
+                    scroll={isMobile ? { x: 560 } : undefined}
                     locale={{ emptyText: <Empty description="暂无分享链接" /> }}
                 />
             </div>

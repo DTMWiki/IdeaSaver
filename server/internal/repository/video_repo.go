@@ -19,19 +19,19 @@ func NewVideoRepository(db *sql.DB) *VideoRepository {
 
 func (r *VideoRepository) Create(ctx context.Context, v *model.Video) error {
 	return r.db.QueryRowContext(ctx,
-		`INSERT INTO videos (user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, transcode_status, transcode_message, status, play_url, size)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`INSERT INTO videos (user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id, created_at, updated_at`,
-		v.UserID, v.Title, v.VID, v.VCode, v.PlayerUserID, v.ThumbnailURL, v.ThumbnailSmallURL, v.TranscodeStatus, v.TranscodeMessage, v.Status, v.PlayURL, v.Size,
+		v.UserID, v.Title, v.VID, v.VCode, v.PlayerUserID, v.ThumbnailURL, v.ThumbnailSmallURL, v.PlayCount, v.TranscodeStatus, v.TranscodeMessage, v.Status, v.PlayURL, v.Size,
 	).Scan(&v.ID, &v.CreatedAt, &v.UpdatedAt)
 }
 
 func (r *VideoRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Video, error) {
 	var v model.Video
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
+		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
 		 FROM videos WHERE id = $1`, id).Scan(
-		&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size,
+		&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.PlayCount, &v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if err != nil {
@@ -48,7 +48,7 @@ func (r *VideoRepository) ListByUser(ctx context.Context, userID uuid.UUID, offs
 	}
 
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
+		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
 		 FROM videos WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
 		userID, limit, offset)
 	if err != nil {
@@ -59,7 +59,7 @@ func (r *VideoRepository) ListByUser(ctx context.Context, userID uuid.UUID, offs
 	var videos []model.Video
 	for rows.Next() {
 		var v model.Video
-		if err := rows.Scan(&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL,
+		if err := rows.Scan(&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.PlayCount,
 			&v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
@@ -80,7 +80,7 @@ func (r *VideoRepository) UpdatePlayURL(ctx context.Context, vid string, playURL
 	return err
 }
 
-func (r *VideoRepository) UpdatePlaybackMeta(ctx context.Context, vid, vcode, playerUserID, playURL, thumbnailURL, thumbnailSmallURL string) error {
+func (r *VideoRepository) UpdatePlaybackMeta(ctx context.Context, vid, vcode, playerUserID, playURL, thumbnailURL, thumbnailSmallURL string, playCount int64) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE videos
 		 SET vcode = CASE WHEN $2 <> '' THEN $2 ELSE vcode END,
@@ -88,9 +88,10 @@ func (r *VideoRepository) UpdatePlaybackMeta(ctx context.Context, vid, vcode, pl
 		     play_url = CASE WHEN $4 <> '' THEN $4 ELSE play_url END,
 		     thumbnail_url = CASE WHEN $5 <> '' THEN $5 ELSE thumbnail_url END,
 		     thumbnail_small_url = CASE WHEN $6 <> '' THEN $6 ELSE thumbnail_small_url END,
+		     play_count = CASE WHEN $7 >= 0 THEN $7 ELSE play_count END,
 		     updated_at = NOW()
 		 WHERE vid = $1`,
-		vid, vcode, playerUserID, playURL, thumbnailURL, thumbnailSmallURL,
+		vid, vcode, playerUserID, playURL, thumbnailURL, thumbnailSmallURL, playCount,
 	)
 	return err
 }
@@ -124,9 +125,9 @@ func (r *VideoRepository) BatchDelete(ctx context.Context, ids []uuid.UUID) erro
 func (r *VideoRepository) FindByVID(ctx context.Context, vid string) (*model.Video, error) {
 	var v model.Video
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
+		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
 		 FROM videos WHERE vid = $1`, vid).Scan(
-		&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size,
+		&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.PlayCount, &v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if err != nil {
@@ -144,7 +145,7 @@ func (r *VideoRepository) ListAll(ctx context.Context, offset, limit int) ([]mod
 	}
 
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
+		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
 		 FROM videos ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -154,7 +155,7 @@ func (r *VideoRepository) ListAll(ctx context.Context, offset, limit int) ([]mod
 	var videos []model.Video
 	for rows.Next() {
 		var v model.Video
-		if err := rows.Scan(&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL,
+		if err := rows.Scan(&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.PlayCount,
 			&v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			return nil, 0, err
 		}

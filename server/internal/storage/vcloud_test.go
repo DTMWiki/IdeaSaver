@@ -112,3 +112,44 @@ func TestPlayerUserIDFromURL(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractPlayCount(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		data map[string]any
+		want int64
+	}{
+		{
+			name: "top-level play_count",
+			data: map[string]any{"play_count": 42.0},
+			want: 42,
+		},
+		{
+			name: "top-level pv",
+			data: map[string]any{"pv": "18"},
+			want: 18,
+		},
+		{
+			name: "stats fallback",
+			data: map[string]any{"stats": map[string]any{"viewCount": 9.0}},
+			want: 9,
+		},
+		{
+			name: "missing",
+			data: map[string]any{},
+			want: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := extractPlayCount(tc.data); got != tc.want {
+				t.Fatalf("extractPlayCount() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

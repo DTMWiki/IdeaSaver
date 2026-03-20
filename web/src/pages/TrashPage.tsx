@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Space, Typography, Empty, App, Popconfirm } from 'antd'
+import { Table, Button, Space, Typography, Empty, App, Popconfirm, Grid } from 'antd'
+import type { Breakpoint } from 'antd'
 import { UndoOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { FileItem } from '@/types'
 import { listTrash, restoreFile, permanentDelete } from '@/api/files'
 import { formatBytes, formatDate } from '@/utils/format'
 
 const { Title, Text } = Typography
+const TABLE_MD: Breakpoint[] = ['md']
+const TABLE_LG: Breakpoint[] = ['lg']
 
 export default function TrashPage() {
     const [files, setFiles] = useState<FileItem[]>([])
     const [loading, setLoading] = useState(true)
     const { message, modal } = App.useApp()
+    const screens = Grid.useBreakpoint()
+    const isMobile = !screens.md
 
     const fetchTrash = async () => {
         setLoading(true)
@@ -65,6 +70,7 @@ export default function TrashPage() {
             dataIndex: 'size',
             key: 'size',
             width: 100,
+            responsive: TABLE_MD,
             render: (size: number, record: FileItem) => record.is_directory ? '-' : formatBytes(size),
         },
         {
@@ -72,16 +78,17 @@ export default function TrashPage() {
             dataIndex: 'deleted_at',
             key: 'deleted_at',
             width: 160,
+            responsive: TABLE_LG,
             render: (date: string) => date ? formatDate(date) : '-',
         },
         {
             title: '操作',
             key: 'actions',
-            width: 160,
+            width: isMobile ? 108 : 160,
             render: (_: unknown, record: FileItem) => (
                 <Space size={4}>
                     <Button type="link" size="small" icon={<UndoOutlined />} onClick={() => handleRestore(record.id)}>
-                        恢复
+                        {!isMobile && '恢复'}
                     </Button>
                     <Popconfirm
                         title="永久删除此文件？"
@@ -91,7 +98,7 @@ export default function TrashPage() {
                         cancelText="取消"
                     >
                         <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                            永久删除
+                            {!isMobile && '永久删除'}
                         </Button>
                     </Popconfirm>
                 </Space>
@@ -101,7 +108,7 @@ export default function TrashPage() {
 
     return (
         <div className="fade-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div className="page-header-bar">
                 <Title level={4} style={{ margin: 0 }}>回收站</Title>
                 {files.length > 0 && (
                     <Button danger icon={<DeleteOutlined />} onClick={handleEmptyTrash}>
@@ -110,13 +117,15 @@ export default function TrashPage() {
                 )}
             </div>
 
-            <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)' }}>
+            <div className="page-card">
                 <Table
                     dataSource={files}
                     columns={columns}
                     rowKey="id"
                     loading={loading}
                     pagination={false}
+                    size={isMobile ? 'small' : 'middle'}
+                    scroll={isMobile ? { x: 560 } : undefined}
                     locale={{ emptyText: <Empty description="回收站为空" /> }}
                 />
             </div>

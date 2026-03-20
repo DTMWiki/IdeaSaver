@@ -70,6 +70,7 @@ export interface Video {
     player_user_id?: string
     thumbnail_url?: string
     thumbnail_small_url?: string
+    play_count: number
     transcode_status: 'pending' | 'processing' | 'ready' | 'failed' | 'blocked'
     transcode_message?: string
     status: number // 0=disabled 1=enabled
