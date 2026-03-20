@@ -219,6 +219,10 @@ export default function AdminVideos() {
             <Text type="secondary" style={{ fontSize: 12 }}>
               播放次数: {record.play_count ?? 0}
             </Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              用户: {record.username || record.user_id || "-"}
+            </Text>
           </div>
         </div>
       ),
