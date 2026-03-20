@@ -14,9 +14,10 @@ export interface ListLogsParams {
 export async function listAllFiles(
   offset = 0,
   limit = 50,
+  keyword = "",
 ): Promise<{ files: FileItem[]; total: number }> {
   const { data } = await client.get("/admin/files", {
-    params: { offset, limit },
+    params: { offset, limit, keyword: keyword || undefined },
   });
   return { files: data.files || [], total: data.total || 0 };
 }
@@ -39,9 +40,10 @@ export async function adminUnbanFile(
 export async function listAllVideos(
   offset = 0,
   limit = 50,
+  keyword = "",
 ): Promise<{ videos: Video[]; total: number }> {
   const { data } = await client.get("/admin/videos", {
-    params: { offset, limit },
+    params: { offset, limit, keyword: keyword || undefined },
   });
   return { videos: data.videos || [], total: data.total || 0 };
 }

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -137,19 +138,41 @@ func (r *FileRepository) CleanupTrash(ctx context.Context, retentionDays int) (i
 }
 
 // ListAll returns all files across all users (for admin).
-func (r *FileRepository) ListAll(ctx context.Context, offset, limit int) ([]model.File, int, error) {
+func (r *FileRepository) ListAll(ctx context.Context, keyword string, offset, limit int) ([]model.File, int, error) {
+	keyword = strings.TrimSpace(keyword)
+	countQuery := `SELECT COUNT(*)
+		FROM files f
+		LEFT JOIN users u ON u.id = f.user_id
+		WHERE f.deleted_at IS NULL`
+	args := []any{}
+	clauses := []string{}
+	if keyword != "" {
+		args = append(args, "%"+keyword+"%")
+		clauses = append(clauses, `(f.name ILIKE $1 OR COALESCE(u.username, '') ILIKE $1 OR COALESCE(f.mime_type, '') ILIKE $1)`)
+	}
+	if len(clauses) > 0 {
+		countQuery += " AND " + strings.Join(clauses, " AND ")
+	}
+
 	var total int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE deleted_at IS NULL`).Scan(&total)
+	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
-		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
-		        deleted_at, created_at, updated_at
-		 FROM files WHERE deleted_at IS NULL
-		 ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	listQuery := `SELECT f.id, f.user_id, f.parent_id, f.name, f.storage_key, f.is_directory, f.mime_type, f.size,
+		        f.public_url, f.thumbnail_key, f.moderation_status, f.moderation_reason, f.moderated_by, f.moderated_at,
+		        f.deleted_at, f.created_at, f.updated_at, COALESCE(u.username, '')
+		 FROM files f
+		 LEFT JOIN users u ON u.id = f.user_id
+		 WHERE f.deleted_at IS NULL`
+	if len(clauses) > 0 {
+		listQuery += " AND " + strings.Join(clauses, " AND ")
+	}
+	listQuery += fmt.Sprintf(" ORDER BY f.created_at DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.QueryContext(ctx, listQuery, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -157,13 +180,21 @@ func (r *FileRepository) ListAll(ctx context.Context, offset, limit int) ([]mode
 
 	var files []model.File
 	for rows.Next() {
-		f, err := scanFile(rows.Scan)
+		f, err := scanFileWithUsername(rows.Scan)
 		if err != nil {
 			return nil, 0, err
 		}
 		files = append(files, *f)
 	}
 	return files, total, nil
+}
+
+func scanFileWithUsername(scan func(dest ...any) error) (*model.File, error) {
+	file, err := scanFileWithExtras(scan, true)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 // FindByStorageKey finds a file by its OSS storage key.
@@ -214,6 +245,10 @@ func (r *FileRepository) ExistsByName(ctx context.Context, userID uuid.UUID, par
 }
 
 func scanFile(scan func(dest ...any) error) (*model.File, error) {
+	return scanFileWithExtras(scan, false)
+}
+
+func scanFileWithExtras(scan func(dest ...any) error, withUsername bool) (*model.File, error) {
 	var f model.File
 	var parentID sql.NullString
 	var storageKey sql.NullString
@@ -225,8 +260,9 @@ func scanFile(scan func(dest ...any) error) (*model.File, error) {
 	var moderatedBy sql.NullString
 	var moderatedAt sql.NullTime
 	var deletedAt sql.NullTime
+	var username sql.NullString
 
-	if err := scan(
+	scanArgs := []any{
 		&f.ID,
 		&f.UserID,
 		&parentID,
@@ -244,7 +280,12 @@ func scanFile(scan func(dest ...any) error) (*model.File, error) {
 		&deletedAt,
 		&f.CreatedAt,
 		&f.UpdatedAt,
-	); err != nil {
+	}
+	if withUsername {
+		scanArgs = append(scanArgs, &username)
+	}
+
+	if err := scan(scanArgs...); err != nil {
 		return nil, err
 	}
 
@@ -276,6 +317,7 @@ func scanFile(scan func(dest ...any) error) (*model.File, error) {
 		value := deletedAt.Time
 		f.DeletedAt = &value
 	}
+	f.Username = username.String
 
 	return &f, nil
 }

@@ -25,13 +25,13 @@ func NewAdminService(cfg *config.Config, repos *repository.Repositories, oss *st
 }
 
 // ListAllFiles returns all files across all users.
-func (s *AdminService) ListAllFiles(ctx context.Context, offset, limit int) ([]model.File, int, error) {
-	return s.repos.Files.ListAll(ctx, offset, limit)
+func (s *AdminService) ListAllFiles(ctx context.Context, keyword string, offset, limit int) ([]model.File, int, error) {
+	return s.repos.Files.ListAll(ctx, keyword, offset, limit)
 }
 
 // ListAllVideos returns all videos across all users.
-func (s *AdminService) ListAllVideos(ctx context.Context, offset, limit int) ([]model.Video, int, error) {
-	return s.repos.Videos.ListAll(ctx, offset, limit)
+func (s *AdminService) ListAllVideos(ctx context.Context, keyword string, offset, limit int) ([]model.Video, int, error) {
+	return s.repos.Videos.ListAll(ctx, keyword, offset, limit)
 }
 
 // ListAuditLogs returns audit logs with optional filters.

@@ -1000,8 +1000,9 @@ func handleAdminListFiles(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		keyword := strings.TrimSpace(c.Query("keyword"))
 
-		files, total, err := svc.Admin.ListAllFiles(c.Request.Context(), offset, limit)
+		files, total, err := svc.Admin.ListAllFiles(c.Request.Context(), keyword, offset, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1077,8 +1078,9 @@ func handleAdminListVideos(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		keyword := strings.TrimSpace(c.Query("keyword"))
 
-		videos, total, err := svc.Admin.ListAllVideos(c.Request.Context(), offset, limit)
+		videos, total, err := svc.Admin.ListAllVideos(c.Request.Context(), keyword, offset, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

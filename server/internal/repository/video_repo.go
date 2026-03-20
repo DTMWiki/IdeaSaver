@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
@@ -137,16 +139,38 @@ func (r *VideoRepository) FindByVID(ctx context.Context, vid string) (*model.Vid
 }
 
 // ListAll returns all videos across all users (for admin).
-func (r *VideoRepository) ListAll(ctx context.Context, offset, limit int) ([]model.Video, int, error) {
+func (r *VideoRepository) ListAll(ctx context.Context, keyword string, offset, limit int) ([]model.Video, int, error) {
+	keyword = strings.TrimSpace(keyword)
+	countQuery := `SELECT COUNT(*)
+		FROM videos v
+		LEFT JOIN users u ON u.id = v.user_id`
+	args := []any{}
+	clauses := []string{}
+	if keyword != "" {
+		args = append(args, "%"+keyword+"%")
+		clauses = append(clauses, `(v.title ILIKE $1 OR COALESCE(v.vcode, '') ILIKE $1 OR COALESCE(v.vid, '') ILIKE $1 OR COALESCE(u.username, '') ILIKE $1)`)
+	}
+	if len(clauses) > 0 {
+		countQuery += " WHERE " + strings.Join(clauses, " AND ")
+	}
+
 	var total int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM videos`).Scan(&total)
+	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, title, vid, vcode, player_user_id, thumbnail_url, thumbnail_small_url, play_count, transcode_status, transcode_message, status, play_url, size, created_at, updated_at
-		 FROM videos ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	listQuery := `SELECT v.id, v.user_id, v.title, v.vid, v.vcode, v.player_user_id, v.thumbnail_url, v.thumbnail_small_url, v.play_count,
+			v.transcode_status, v.transcode_message, v.status, v.play_url, v.size, v.created_at, v.updated_at, COALESCE(u.username, '')
+		 FROM videos v
+		 LEFT JOIN users u ON u.id = v.user_id`
+	if len(clauses) > 0 {
+		listQuery += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	listQuery += fmt.Sprintf(" ORDER BY v.created_at DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.QueryContext(ctx, listQuery, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -156,7 +180,7 @@ func (r *VideoRepository) ListAll(ctx context.Context, offset, limit int) ([]mod
 	for rows.Next() {
 		var v model.Video
 		if err := rows.Scan(&v.ID, &v.UserID, &v.Title, &v.VID, &v.VCode, &v.PlayerUserID, &v.ThumbnailURL, &v.ThumbnailSmallURL, &v.PlayCount,
-			&v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			&v.TranscodeStatus, &v.TranscodeMessage, &v.Status, &v.PlayURL, &v.Size, &v.CreatedAt, &v.UpdatedAt, &v.Username); err != nil {
 			return nil, 0, err
 		}
 		videos = append(videos, v)
