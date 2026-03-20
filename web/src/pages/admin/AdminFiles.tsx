@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Table,
   Button,
@@ -49,26 +49,27 @@ export default function AdminFiles() {
   const [banReason, setBanReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [keyword, setKeyword] = useState("");
   const pageSize = 50;
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
 
-  const fetchFiles = async (p: number) => {
+  const fetchFiles = useCallback(async (p: number, nextKeyword = keyword) => {
     setLoading(true);
     try {
-      const data = await listAllFiles((p - 1) * pageSize, pageSize);
+      const data = await listAllFiles((p - 1) * pageSize, pageSize, nextKeyword);
       setFiles(data.files);
       setTotal(data.total);
       setPage(p);
     } finally {
       setLoading(false);
     }
-  };
+  }, [keyword]);
 
   useEffect(() => {
-    fetchFiles(1);
-  }, []);
+    void fetchFiles(1);
+  }, [fetchFiles]);
 
   const handleCopyLink = async (file: FileItem) => {
     try {
@@ -144,12 +145,13 @@ export default function AdminFiles() {
     },
     {
       title: "用户",
-      dataIndex: "user_id",
-      key: "user_id",
-      width: 120,
-      responsive: TABLE_LG,
+      dataIndex: "username",
+      key: "username",
+      width: 140,
+      responsive: TABLE_MD,
       ellipsis: true,
-      render: (id: string) => id.slice(0, 8) + "...",
+      render: (_: string | undefined, record: FileItem) =>
+        record.username || record.user_id || "-",
     },
     {
       title: "类型",
@@ -278,6 +280,17 @@ export default function AdminFiles() {
           全局文件管理
         </Title>
         <div className="page-header-actions">
+          <Input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onPressEnter={() => void fetchFiles(1, keyword)}
+            placeholder="搜索文件名 / 扩展名 / 用户名"
+            allowClear
+            style={{ width: isMobile ? "100%" : 260 }}
+          />
+          <Button onClick={() => void fetchFiles(1, keyword)}>
+            查询
+          </Button>
           <Button icon={<ReloadOutlined />} onClick={() => fetchFiles(page)}>
             刷新
           </Button>
@@ -301,7 +314,7 @@ export default function AdminFiles() {
             current={page}
             total={total}
             pageSize={pageSize}
-            onChange={fetchFiles}
+            onChange={(nextPage) => void fetchFiles(nextPage)}
             showTotal={(t) => `共 ${t} 个文件`}
           />
         </div>
