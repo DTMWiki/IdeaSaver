@@ -42,6 +42,23 @@ func (s *FileService) GetFileByID(ctx context.Context, id, userID uuid.UUID) (*m
 	return file, nil
 }
 
+func (s *FileService) GetFileForActor(ctx context.Context, id uuid.UUID, actor *model.User) (*model.File, error) {
+	file, err := s.repos.Files.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if actor == nil {
+		return nil, fmt.Errorf("permission denied")
+	}
+	if actor.Role != "admin" && file.UserID != actor.ID {
+		return nil, fmt.Errorf("permission denied")
+	}
+	if file.DeletedAt != nil {
+		return nil, fmt.Errorf("file deleted")
+	}
+	return file, nil
+}
+
 func NewFileService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient) *FileService {
 	return &FileService{cfg: cfg, repos: repos, oss: oss}
 }
@@ -257,20 +274,31 @@ func (s *FileService) GetFileURL(ctx context.Context, fileID uuid.UUID, userID u
 		return "", "", fmt.Errorf("permission denied")
 	}
 
-	url := file.PublicURL
-	markdown := fmt.Sprintf("[%s](%s)", file.Name, url)
+	return buildFileURLResponse(file)
+}
 
-	// Use image markdown for image files
-	if strings.HasPrefix(file.MimeType, "image/") {
-		markdown = fmt.Sprintf("![%s](%s)", file.Name, url)
+func (s *FileService) GetFileURLForActor(ctx context.Context, fileID uuid.UUID, actor *model.User) (string, string, error) {
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return "", "", err
+	}
+	if actor == nil {
+		return "", "", fmt.Errorf("permission denied")
+	}
+	if actor.Role != "admin" && file.UserID != actor.ID {
+		return "", "", fmt.Errorf("permission denied")
 	}
 
-	return url, markdown, nil
+	return buildFileURLResponse(file)
 }
 
 // ProxyFile returns a reader for the file content from OSS.
 func (s *FileService) ProxyFile(ctx context.Context, storageKey string) (io.ReadCloser, string, int64, error) {
 	return s.oss.GetObject(ctx, storageKey)
+}
+
+func (s *FileService) ProxyThumbnail(ctx context.Context, storageKey, style string) (io.ReadCloser, string, int64, error) {
+	return s.oss.GetStyledObject(ctx, storageKey, style)
 }
 
 // ResolvePublicFile returns a file record by direct-link path segments.
@@ -383,4 +411,18 @@ func uuidToString(id *uuid.UUID) string {
 		return ""
 	}
 	return id.String()
+}
+
+func buildFileURLResponse(file *model.File) (string, string, error) {
+	if file == nil {
+		return "", "", fmt.Errorf("file is nil")
+	}
+	url := file.PublicURL
+	markdown := fmt.Sprintf("[%s](%s)", file.Name, url)
+
+	if strings.HasPrefix(file.MimeType, "image/") {
+		markdown = fmt.Sprintf("![%s](%s)", file.Name, url)
+	}
+
+	return url, markdown, nil
 }

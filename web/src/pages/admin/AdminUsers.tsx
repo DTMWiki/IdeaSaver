@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Typography, Empty, App, Pagination, InputNumber, Modal, Tag, Space } from 'antd'
+import { Table, Button, Typography, Empty, App, Pagination, InputNumber, Modal, Tag, Space, Grid } from 'antd'
+import type { Breakpoint } from 'antd'
 import { EditOutlined } from '@ant-design/icons'
 import type { User } from '@/types'
 import { listUsers, updateUserQuota } from '@/api/admin'
 import { formatBytes, formatDate } from '@/utils/format'
 
 const { Title, Text } = Typography
+const TABLE_MD: Breakpoint[] = ['md']
+const TABLE_LG: Breakpoint[] = ['lg']
+const TABLE_XL: Breakpoint[] = ['xl']
 
 export default function AdminUsers() {
     const [users, setUsers] = useState<User[]>([])
@@ -14,6 +18,8 @@ export default function AdminUsers() {
     const [page, setPage] = useState(1)
     const pageSize = 50
     const { message } = App.useApp()
+    const screens = Grid.useBreakpoint()
+    const isMobile = !screens.md
 
     // Quota edit
     const [editUser, setEditUser] = useState<User | null>(null)
@@ -54,18 +60,20 @@ export default function AdminUsers() {
     const columns = [
         { title: '用户名', dataIndex: 'username', key: 'username', width: 140 },
         { title: '显示名', dataIndex: 'display_name', key: 'display_name', ellipsis: true },
-        { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
+        { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true, responsive: TABLE_LG },
         {
             title: '角色',
             dataIndex: 'role',
             key: 'role',
             width: 80,
+            responsive: TABLE_MD,
             render: (role: string) => role === 'admin' ? <Tag color="gold">管理员</Tag> : <Tag>用户</Tag>,
         },
         {
             title: '存储配额',
             key: 'quota',
             width: 180,
+            responsive: TABLE_MD,
             render: (_: unknown, record: User) => {
                 const percent = record.storage_quota > 0 ? Math.round((record.storage_used / record.storage_quota) * 100) : 0
                 return (
@@ -80,15 +88,16 @@ export default function AdminUsers() {
             dataIndex: 'created_at',
             key: 'created_at',
             width: 160,
+            responsive: TABLE_XL,
             render: (date: string) => formatDate(date),
         },
         {
             title: '操作',
             key: 'actions',
-            width: 100,
+            width: 72,
             render: (_: unknown, record: User) => (
                 <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openQuotaEdit(record)}>
-                    配额
+                    {!isMobile && '配额'}
                 </Button>
             ),
         },
@@ -97,8 +106,17 @@ export default function AdminUsers() {
     return (
         <div className="fade-in">
             <Title level={4} style={{ marginBottom: 16 }}>用户管理</Title>
-            <div style={{ background: 'var(--color-bg-container)', borderRadius: 'var(--border-radius)', border: '1px solid var(--color-border-secondary)' }}>
-                <Table dataSource={users} columns={columns} rowKey="id" loading={loading} pagination={false} locale={{ emptyText: <Empty description="暂无用户" /> }} />
+            <div className="page-card">
+                <Table
+                    dataSource={users}
+                    columns={columns}
+                    rowKey="id"
+                    loading={loading}
+                    pagination={false}
+                    size={isMobile ? 'small' : 'middle'}
+                    scroll={isMobile ? { x: 760 } : { x: 980 }}
+                    locale={{ emptyText: <Empty description="暂无用户" /> }}
+                />
             </div>
             {total > pageSize && (
                 <div style={{ textAlign: 'center', marginTop: 16 }}>

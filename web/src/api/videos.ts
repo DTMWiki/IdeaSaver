@@ -6,6 +6,7 @@ export interface VideoPlayInfo {
     play_url?: string
     vcode?: string
     player_user_id?: string
+    play_count: number
     transcode_status: 'pending' | 'processing' | 'ready' | 'failed' | 'blocked'
     message?: string
 }

@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag } from 'antd'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag, Input, Grid } from 'antd'
 import {
     UploadOutlined,
     PlayCircleOutlined,
     DeleteOutlined,
+    ShareAltOutlined,
+    CopyOutlined,
 } from '@ant-design/icons'
 import { useVideoStore } from '@/stores/videoStore'
 import { getPlayInfo, type VideoPlayInfo } from '@/api/videos'
 import { useUploadStore } from '@/stores/uploadStore'
-import { formatBytes, formatDate } from '@/utils/format'
+import { formatBytes, formatDate, copyToClipboard } from '@/utils/format'
 import VideoThumbnail from '@/components/VideoThumbnail'
 import type { Video } from '@/types'
 
@@ -62,7 +64,7 @@ function waitForDogePlayer(timeoutMs = 5000) {
 function loadDogePlayerScript() {
     if (dogePlayerLoader) return dogePlayerLoader
 
-    dogePlayerLoader = new Promise((resolve, reject) => {
+    const loaderPromise = new Promise<void>((resolve, reject) => {
         if (resolveDogePlayer()) {
             resolve()
             return
@@ -70,23 +72,22 @@ function loadDogePlayerScript() {
 
         const existing = document.querySelector('script[data-doge-player-sdk="true"]') as HTMLScriptElement | null
         if (existing) {
-            const finish = () => waitForDogePlayer().then(resolve).catch(reject)
-            existing.addEventListener('load', finish, { once: true })
-            existing.addEventListener('error', () => reject(new Error('加载 DogePlayer 脚本失败')))
-            window.setTimeout(finish, 0)
-            return
+            existing.remove()
         }
 
         const script = document.createElement('script')
+        script.type = 'text/javascript'
         script.src = DOGE_PLAYER_SCRIPT
-        script.async = true
-        script.crossOrigin = 'anonymous'
         script.setAttribute('data-doge-player-sdk', 'true')
         script.onload = () => { waitForDogePlayer().then(resolve).catch(reject) }
         script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
         document.head.appendChild(script)
+    }).catch((error) => {
+        dogePlayerLoader = null
+        throw error
     })
 
+    dogePlayerLoader = loaderPromise
     return dogePlayerLoader
 }
 
@@ -94,12 +95,22 @@ export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
     const addVideoFiles = useUploadStore((state) => state.addVideoFiles)
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const playerContainerRef = useRef<HTMLDivElement>(null)
+    const playerContainerRef = useRef<HTMLDivElement | null>(null)
+    const [playerContainerTick, setPlayerContainerTick] = useState(0)
     const { message, modal } = App.useApp()
+    const screens = Grid.useBreakpoint()
+    const isMobile = !screens.md
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [playInfo, setPlayInfo] = useState<VideoPlayInfo | null>(null)
     const [sdkError, setSdkError] = useState<string | null>(null)
     const [sdkLoading, setSdkLoading] = useState(false)
+    const [shareVideo, setShareVideo] = useState<Video | null>(null)
+    const [shareLoading, setShareLoading] = useState(false)
+    const [shareContext, setShareContext] = useState<{ vcode: string; userId: string } | null>(null)
+    const [shareMessage, setShareMessage] = useState('')
+    const [shareAutoPlay, setShareAutoPlay] = useState(false)
+    const [shareWidth, setShareWidth] = useState('')
+    const [shareHeight, setShareHeight] = useState('')
     const sdkRequirementError = useMemo(() => {
         if (!playInfo?.ready) return null
 
@@ -115,6 +126,21 @@ export default function VideoPage() {
         }
         return null
     }, [playInfo])
+    const shareIframeCode = useMemo(() => {
+        if (!shareContext) return ''
+        return buildDogeIframeCode({
+            vcode: shareContext.vcode,
+            userId: shareContext.userId,
+            autoPlay: shareAutoPlay,
+            width: normalizeDimension(shareWidth, '600'),
+            height: normalizeDimension(shareHeight, '400'),
+        })
+    }, [shareAutoPlay, shareContext, shareHeight, shareWidth])
+
+    const attachPlayerContainer = useCallback((node: HTMLDivElement | null) => {
+        playerContainerRef.current = node
+        setPlayerContainerTick((value) => value + 1)
+    }, [])
 
     useEffect(() => { fetchVideos(1) }, [fetchVideos])
 
@@ -128,6 +154,10 @@ export default function VideoPage() {
         )
         const sdkUserIDNum = Number(sdkUserID)
         const playerContainer = playerContainerRef.current
+
+        if (!playerContainer) {
+            return
+        }
 
         if (sdkRequirementError || !vcode || !sdkUserID || Number.isNaN(sdkUserIDNum) || sdkUserIDNum <= 0) {
             return
@@ -145,8 +175,8 @@ export default function VideoPage() {
                 if (disposed) return
 
                 const DogePlayer = resolveDogePlayer()
-                if (!DogePlayer || !playerContainer) {
-                    setSdkError('DogePlayer SDK 未成功注入，请检查 player.dogecloud.com 的网络连通性')
+                if (!DogePlayer) {
+                    setSdkError('DogePlayer SDK 未成功注入，请稍后重试或检查 player.dogecloud.com 连通性')
                     setSdkLoading(false)
                     return
                 }
@@ -181,7 +211,7 @@ export default function VideoPage() {
                 playerContainer.innerHTML = ''
             }
         }
-    }, [playInfo, sdkRequirementError])
+    }, [playInfo, playerContainerTick, sdkRequirementError])
 
     const handleUpload = () => fileInputRef.current?.click()
 
@@ -237,6 +267,44 @@ export default function VideoPage() {
         setSelectedIds(next)
     }
 
+    const handleShare = async (video: Video) => {
+        setShareVideo(video)
+        setShareLoading(true)
+        setShareContext(null)
+        setShareMessage('')
+        setShareAutoPlay(false)
+        setShareWidth('')
+        setShareHeight('')
+
+        try {
+            const info = await getPlayInfo(video.id)
+            if (!info.ready) {
+                setShareMessage(info.message || '视频仍在转码中，暂时不能生成分享链接')
+                return
+            }
+
+            const vcode = firstNonEmptyString(info.vcode, video.vcode)
+            const playerUserId = firstNonEmptyString(
+                info.player_user_id,
+                video.player_user_id,
+                playerUserIDFromPlayURL(info.play_url),
+                playerUserIDFromPlayURL(video.play_url),
+            )
+            if (!vcode || !playerUserId) {
+                setShareMessage('当前视频缺少 VCode 或多吉云 userId，暂时无法生成分享链接')
+                return
+            }
+
+            setShareVideo({ ...video, play_count: info.play_count ?? video.play_count })
+            setShareContext({ vcode, userId: playerUserId })
+        } catch (error: unknown) {
+            const maybeMessage = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+            setShareMessage(maybeMessage || '生成分享链接失败')
+        } finally {
+            setShareLoading(false)
+        }
+    }
+
     return (
         <div className="fade-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
@@ -276,8 +344,11 @@ export default function VideoPage() {
                                     )}
                                     onClick={() => toggleSelect(video.id)}
                                     actions={[
+                                        <Button type="text" icon={<ShareAltOutlined />} onClick={(e) => { e.stopPropagation(); handleShare(video) }} key="share">
+                                            分享
+                                        </Button>,
                                         <Button type="text" icon={<PlayCircleOutlined />} onClick={(e) => { e.stopPropagation(); handlePlay(video.id) }} key="play">
-                                            播放
+                                            {!isMobile ? '播放' : null}
                                         </Button>,
                                         <Popconfirm
                                             key="del"
@@ -286,7 +357,7 @@ export default function VideoPage() {
                                             onCancel={(e) => e?.stopPropagation()}
                                         >
                                             <Button type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
-                                                删除
+                                                {!isMobile ? '删除' : null}
                                             </Button>
                                         </Popconfirm>,
                                     ]}
@@ -306,6 +377,9 @@ export default function VideoPage() {
                                                 <Text type="secondary" style={{ fontSize: 12 }}>{formatDate(video.created_at)}</Text>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>
                                                     VCode: {video.vcode || '-'}
+                                                </Text>
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    播放次数: {video.play_count ?? 0}
                                                 </Text>
                                                 {video.transcode_message && (
                                                     <Text type="secondary" style={{ fontSize: 12 }}>
@@ -348,7 +422,7 @@ export default function VideoPage() {
                     setSdkLoading(false)
                 }}
                 footer={null}
-                width={820}
+                width={isMobile ? 'calc(100vw - 24px)' : 820}
                 destroyOnClose
             >
                 {playInfo && (
@@ -375,7 +449,7 @@ export default function VideoPage() {
                         ) : (
                             <div style={{ position: 'relative' }}>
                                 <div
-                                    ref={playerContainerRef}
+                                    ref={attachPlayerContainer}
                                     style={{ width: '100%', minHeight: 420, background: '#000' }}
                                 />
                                 {sdkLoading && (
@@ -395,6 +469,90 @@ export default function VideoPage() {
                         )}
                     </Space>
                 )}
+            </Modal>
+
+            <Modal
+                title={shareVideo ? `分享视频：${shareVideo.title}` : '分享视频'}
+                open={!!shareVideo}
+                onCancel={() => {
+                    setShareVideo(null)
+                    setShareLoading(false)
+                    setShareContext(null)
+                    setShareMessage('')
+                    setShareAutoPlay(false)
+                    setShareWidth('')
+                    setShareHeight('')
+                }}
+                footer={null}
+                width={isMobile ? 'calc(100vw - 24px)' : 700}
+                destroyOnClose
+            >
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Alert
+                        type={shareContext ? 'success' : 'info'}
+                        showIcon
+                        message="使用嵌入代码接入多吉云播放器"
+                        description="你已开启防盗链时，不建议再暴露直接访问地址。这里默认只提供可复制的 iframe 嵌入代码。"
+                    />
+                    <div>
+                        <Text strong>使用方法（Markdown / HTML 嵌入）</Text>
+                        <ol style={{ margin: '8px 0 0', paddingInlineStart: 18, color: 'rgba(71,85,105,0.92)' }}>
+                            <li>复制下方 iframe 代码，粘贴到支持 HTML 的页面中。</li>
+                            <li>若系统支持 Markdown 中嵌入 HTML，可直接使用这段代码。</li>
+                            <li>如果视频仍在转码，请等待多吉云回调完成后再复制。</li>
+                        </ol>
+                    </div>
+                    {shareLoading ? (
+                        <Alert type="info" showIcon message="正在生成嵌入代码..." />
+                    ) : shareContext ? (
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <Text type="secondary">播放次数：{shareVideo?.play_count ?? 0}</Text>
+                            <Space wrap size={12} style={{ width: '100%' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    <Text type="secondary">自动播放</Text>
+                                    <Switch checked={shareAutoPlay} onChange={setShareAutoPlay} />
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    <Text type="secondary">宽度</Text>
+                                    <Input
+                                        value={shareWidth}
+                                        onChange={(e) => setShareWidth(e.target.value.replace(/[^\d]/g, ''))}
+                                        placeholder="600"
+                                        style={{ width: isMobile ? '100%' : 120 }}
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    <Text type="secondary">高度</Text>
+                                    <Input
+                                        value={shareHeight}
+                                        onChange={(e) => setShareHeight(e.target.value.replace(/[^\d]/g, ''))}
+                                        placeholder="400"
+                                        style={{ width: isMobile ? '100%' : 120 }}
+                                    />
+                                </div>
+                            </Space>
+                            <div style={{ position: 'relative', borderRadius: 14, overflow: 'hidden', background: '#0f172a' }}>
+                                <Button
+                                    type="primary"
+                                    icon={<CopyOutlined />}
+                                    size="small"
+                                    style={{ position: 'absolute', top: 12, right: 12, zIndex: 1 }}
+                                    onClick={async () => {
+                                        await copyToClipboard(shareIframeCode)
+                                        message.success('嵌入代码已复制')
+                                    }}
+                                >
+                                    复制
+                                </Button>
+                                <pre style={{ margin: 0, padding: '52px 16px 16px', color: '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13, lineHeight: 1.6 }}>
+                                    <code>{shareIframeCode}</code>
+                                </pre>
+                            </div>
+                        </Space>
+                    ) : (
+                        <Alert type="warning" showIcon message={shareMessage || '当前视频暂不可分享'} />
+                    )}
+                </Space>
             </Modal>
         </div>
     )
@@ -438,4 +596,35 @@ function playerUserIDFromPlayURL(raw?: string) {
     } catch {
         return ''
     }
+}
+
+function buildDogeShareURL(vcode: string, userId: string, options?: { autoPlay?: boolean; inFrame?: boolean }) {
+    const nextVCode = vcode.trim()
+    const nextUserId = userId.trim()
+    if (!nextVCode || !nextUserId) return ''
+
+    const params = new URLSearchParams({
+        vcode: nextVCode,
+        userId: nextUserId,
+    })
+    if (options?.autoPlay) {
+        params.set('autoPlay', 'true')
+    }
+    if (options?.inFrame) {
+        params.set('inFrame', 'true')
+    }
+    return `https://player.dogecloud.com/web/player.html?${params.toString()}`
+}
+
+function buildDogeIframeCode(input: { vcode: string; userId: string; autoPlay: boolean; width: string; height: string }) {
+    const src = buildDogeShareURL(input.vcode, input.userId, {
+        autoPlay: input.autoPlay,
+        inFrame: true,
+    })
+    return `<iframe id="dogePlayerFrame" src="${src}" allowfullscreen="true" msallowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" oallowfullscreen="true" allowtransparency="true" scrolling="no" width="${input.width}" height="${input.height}" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerPolicy="unsafe-url"></iframe>`
+}
+
+function normalizeDimension(value: string, fallback: string) {
+    const next = value.trim()
+    return next || fallback
 }

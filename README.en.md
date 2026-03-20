@@ -89,6 +89,21 @@ See: [deploy/deploy.md](./deploy/deploy.md)
 - Rollback plan: [deploy/rollback-plan.md](./deploy/rollback-plan.md)
 - Manual acceptance script: [deploy/manual-acceptance.md](./deploy/manual-acceptance.md)
 
+## Contributing
+
+- The default development branch is `dev`, `canary` is for pre-release validation, and `master` is the protected production branch.
+- Run the minimum validation set before opening a PR:
+  - `go test ./...`
+  - `go build ./...`
+  - `cd web && npm run lint && npm run build`
+- If a change touches deployment, authentication, OSS/VCloud integration, or audit logging, update the related files under `deploy/` as part of the same change.
+- Prefer source-package delivery plus on-server build for production releases instead of shipping local build artifacts.
+
+## Contributors
+
+- Maintained by DTMWiki
+- Contributions are welcome through GitHub Issues and Pull Requests, especially for features, bug fixes, documentation, deployment notes, and security hardening.
+
 ## License
 
 MIT License
