@@ -142,6 +142,24 @@ export default function AdminFiles() {
       dataIndex: "name",
       key: "name",
       ellipsis: true,
+      render: (_: string, record: FileItem) => (
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontWeight: 600,
+            }}
+            title={record.name}
+          >
+            {record.name}
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            用户: {record.username || record.user_id || "-"}
+          </Typography.Text>
+        </div>
+      ),
     },
     {
       title: "用户",
