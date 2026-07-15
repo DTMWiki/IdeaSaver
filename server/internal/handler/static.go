@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/gin-gonic/gin"
