@@ -16,7 +16,7 @@
     "@fortawesome/free-solid-svg-icons": "^7.3.0",
     "@fortawesome/react-fontawesome": "^3.4.0",
     "antd": "^6.5.1",
-    "axios": "^1.13.6",
+    "axios": "^1.18.1",
     "dayjs": "^1.11.21",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
