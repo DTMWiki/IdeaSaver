@@ -41,6 +41,13 @@ export interface ShareFileView {
     is_image: boolean
 }
 
+/** Result of unlocking a share: metadata + short-lived download token. */
+export interface ShareAccessResult {
+    file: ShareFileView
+    download_token: string
+    token_expires_in: number
+}
+
 export interface Share {
     id: string
     user_id: string
@@ -51,6 +58,7 @@ export interface Share {
     created_at: string
     // file info (joined from server)
     file_name?: string
+    has_password?: boolean
 }
 
 export interface UploadTask {

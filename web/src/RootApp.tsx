@@ -19,6 +19,7 @@ export default function RootApp() {
                 },
             }}
         >
+            {/* AntApp wraps routes so public pages (share access) can use message/modal hooks */}
             <AntApp>
                 <BrowserRouter>
                     <App />

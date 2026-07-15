@@ -1,3 +1,5 @@
+// Official DogeCloud JS player loader (docs: https://docs.dogecloud.com/vcloud/sdk-player-js)
+// Usage: new DogePlayer({ container, userId, vcode, autoPlay })
 const DOGE_PLAYER_SCRIPT = 'https://player.dogecloud.com/js/loader'
 let dogePlayerLoader: Promise<void> | null = null
 
