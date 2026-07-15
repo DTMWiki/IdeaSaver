@@ -13,14 +13,14 @@ import (
 
 func handleLogin(cfg *config.Config, svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		state, err := newOAuthState()
-		if err != nil {
+		// Random OAuth state is generated inside AuthService.BeginAuth (crypto/rand).
+		url, state, err := svc.Auth.BeginAuth()
+		if err != nil || url == "" || state == "" {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法发起登录"})
 			return
 		}
 		c.SetSameSite(http.SameSiteLaxMode)
 		c.SetCookie(oauthStateCookie, state, 600, "/", "", cookieSecure(cfg), true)
-		url := svc.Auth.GetAuthURL(state)
 		c.JSON(http.StatusOK, gin.H{"url": url})
 	}
 }

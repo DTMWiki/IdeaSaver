@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -57,9 +59,27 @@ func NewAuthService(cfg *config.Config, userRepo *repository.UserRepository, aud
 	}
 }
 
-// GetAuthURL returns the OAuth2 authorization URL.
-func (s *AuthService) GetAuthURL(state string) string {
-	return s.oauth2.AuthCodeURL(state)
+// BeginAuth generates a cryptographically random OAuth state and returns the
+// authorization URL. Callers must persist state (e.g. HttpOnly cookie) and
+// verify it on callback.
+func (s *AuthService) BeginAuth() (authURL, state string, err error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", fmt.Errorf("failed to generate oauth state: %w", err)
+	}
+	state = hex.EncodeToString(buf)
+	// state is always random here — never a constant string.
+	return s.oauth2.AuthCodeURL(state), state, nil
+}
+
+// GetAuthURL always generates a fresh random OAuth state (BeginAuth).
+// The state argument is ignored so callers cannot pass a constant value into AuthCodeURL.
+func (s *AuthService) GetAuthURL(_ string) string {
+	url, _, err := s.BeginAuth()
+	if err != nil {
+		return ""
+	}
+	return url
 }
 
 // ExchangeCode exchanges an authorization code for user info and returns a JWT.
