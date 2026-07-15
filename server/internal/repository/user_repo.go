@@ -52,6 +52,7 @@ func (r *UserRepository) Upsert(ctx context.Context, u *model.User) error {
 		 ON CONFLICT (username) DO UPDATE SET
 		   display_name = EXCLUDED.display_name,
 		   email = EXCLUDED.email,
+		   role = EXCLUDED.role,
 		   updated_at = NOW()
 		 RETURNING id, created_at, updated_at`,
 		u.Username, u.DisplayName, u.Email, u.Role, u.StorageQuota,
@@ -71,6 +72,51 @@ func (r *UserRepository) UpdateQuota(ctx context.Context, userID uuid.UUID, quot
 		`UPDATE users SET storage_quota = $2, updated_at = NOW() WHERE id = $1`,
 		userID, quota,
 	)
+	return err
+}
+
+// RecalcAllStorageUsed recomputes storage_used for every user from files + videos.
+// Active files only (not soft-deleted); all video records count toward usage.
+func (r *UserRepository) RecalcAllStorageUsed(ctx context.Context) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE users u
+		SET storage_used = COALESCE((
+			SELECT SUM(f.size)
+			FROM files f
+			WHERE f.user_id = u.id
+			  AND f.deleted_at IS NULL
+			  AND f.is_directory = FALSE
+		), 0) + COALESCE((
+			SELECT SUM(v.size)
+			FROM videos v
+			WHERE v.user_id = u.id
+		), 0),
+		updated_at = NOW()
+	`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RecalcStorageUsed recomputes storage_used for a single user.
+func (r *UserRepository) RecalcStorageUsed(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE users u
+		SET storage_used = COALESCE((
+			SELECT SUM(f.size)
+			FROM files f
+			WHERE f.user_id = u.id
+			  AND f.deleted_at IS NULL
+			  AND f.is_directory = FALSE
+		), 0) + COALESCE((
+			SELECT SUM(v.size)
+			FROM videos v
+			WHERE v.user_id = u.id
+		), 0),
+		updated_at = NOW()
+		WHERE u.id = $1
+	`, userID)
 	return err
 }
 

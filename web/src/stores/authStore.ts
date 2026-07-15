@@ -3,23 +3,24 @@ import type { User } from '@/types'
 import * as authApi from '@/api/auth'
 
 interface AuthState {
-    token: string | null
     user: User | null
     loading: boolean
+    bootstrapped: boolean
     isLoggedIn: boolean
     isAdmin: boolean
 
     login: () => Promise<void>
     logout: () => void
-    handleCallback: (code: string) => Promise<void>
+    handleCallback: (code: string, state?: string | null) => Promise<void>
+    bootstrap: () => Promise<void>
     fetchMe: () => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-    token: localStorage.getItem('token'),
     user: null,
     loading: false,
-    isLoggedIn: !!localStorage.getItem('token'),
+    bootstrapped: false,
+    isLoggedIn: false,
     isAdmin: false,
 
     login: async () => {
@@ -28,39 +29,76 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     },
 
     logout: () => {
-        localStorage.removeItem('token')
-        set({ token: null, user: null, isLoggedIn: false, isAdmin: false })
-        window.location.href = '/'
+        void authApi.logoutSession().finally(() => {
+            set({ user: null, isLoggedIn: false, isAdmin: false, bootstrapped: true })
+            window.location.href = '/'
+        })
     },
 
-    handleCallback: async (code: string) => {
+    handleCallback: async (code: string, state?: string | null) => {
         set({ loading: true })
         try {
-            const { token, user } = await authApi.exchangeCode(code)
-            localStorage.setItem('token', token)
+            const { user } = await authApi.exchangeCode(code, state)
             set({
-                token,
                 user,
                 isLoggedIn: true,
                 isAdmin: user.role === 'admin',
                 loading: false,
+                bootstrapped: true,
+            })
+        } catch (err: unknown) {
+            set({ loading: false, bootstrapped: true, isLoggedIn: false, user: null, isAdmin: false })
+            const msg =
+                (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+                '登录失败'
+            throw new Error(msg)
+        }
+    },
+
+    bootstrap: async () => {
+        if (get().bootstrapped && !get().loading) {
+            // Still allow refresh of session
+        }
+        set({ loading: true })
+        try {
+            const user = await authApi.getMe()
+            set({
+                user,
+                isLoggedIn: true,
+                isAdmin: user.role === 'admin',
+                loading: false,
+                bootstrapped: true,
             })
         } catch {
-            set({ loading: false })
-            throw new Error('登录失败')
+            set({
+                user: null,
+                isLoggedIn: false,
+                isAdmin: false,
+                loading: false,
+                bootstrapped: true,
+            })
         }
     },
 
     fetchMe: async () => {
-        if (!get().token) return
         set({ loading: true })
         try {
             const user = await authApi.getMe()
-            set({ user, isLoggedIn: true, isAdmin: user.role === 'admin', loading: false })
+            set({
+                user,
+                isLoggedIn: true,
+                isAdmin: user.role === 'admin',
+                loading: false,
+                bootstrapped: true,
+            })
         } catch {
-            // Token might be invalid
-            localStorage.removeItem('token')
-            set({ token: null, user: null, isLoggedIn: false, isAdmin: false, loading: false })
+            set({
+                user: null,
+                isLoggedIn: false,
+                isAdmin: false,
+                loading: false,
+                bootstrapped: true,
+            })
         }
     },
 }))

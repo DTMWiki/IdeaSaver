@@ -53,6 +53,7 @@ Commands:
   config get <KEY>   Get a configuration value
   config set <K> <V> Set a configuration value
   db migrate         Run database migrations
+  db recalc-storage  Recompute storage_used (files + videos) for all users
   db status          Show migration status
   help               Show this help message`)
 }
@@ -171,7 +172,7 @@ func handleConfig() {
 
 func handleDB() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: ideactl db <migrate|status>")
+		fmt.Println("Usage: ideactl db <migrate|recalc-storage|status>")
 		os.Exit(1)
 	}
 
@@ -185,6 +186,15 @@ func handleDB() {
 			os.Exit(1)
 		}
 
+	case "recalc-storage":
+		cmd := exec.Command(binaryFile, "recalc-storage")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Recalc storage failed: %v\n", err)
+			os.Exit(1)
+		}
+
 	case "status":
 		fmt.Println("Checking migration status...")
 		// Simple check: try to connect and verify tables exist
@@ -194,7 +204,7 @@ func handleDB() {
 		_ = cmd.Run()
 
 	default:
-		fmt.Println("Usage: ideactl db <migrate|status>")
+		fmt.Println("Usage: ideactl db <migrate|recalc-storage|status>")
 		os.Exit(1)
 	}
 }

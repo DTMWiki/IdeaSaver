@@ -30,6 +30,9 @@ type Config struct {
 	// JWT
 	JWTSecret string
 
+	// Video provider callback auth (empty = allow only in non-production)
+	VideoCallbackSecret string
+
 	// DogeCloud OSS
 	DogeAccessKey string
 	DogeSecretKey string
@@ -74,7 +77,8 @@ func Load() (*Config, error) {
 		OIDCUserInfoURL:      getEnv("IDEASAVER_OIDC_USERINFO_URL", ""),
 		OIDCScopes:           getEnv("IDEASAVER_OIDC_SCOPES", ""),
 
-		JWTSecret: getEnv("IDEASAVER_JWT_SECRET", ""),
+		JWTSecret:           getEnv("IDEASAVER_JWT_SECRET", ""),
+		VideoCallbackSecret: getEnv("IDEASAVER_VIDEO_CALLBACK_SECRET", ""),
 
 		DogeAccessKey: getEnv("IDEASAVER_DOGE_ACCESS_KEY", ""),
 		DogeSecretKey: getEnv("IDEASAVER_DOGE_SECRET_KEY", ""),

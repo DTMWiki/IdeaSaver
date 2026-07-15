@@ -42,9 +42,16 @@
     background: var(--color-bg-spotlight);
 }
 
-.logo-icon {
-    font-size: 24px;
-    line-height: 1;
+.logo-mark {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+    font-size: 14px;
+    color: #fff;
+    background: linear-gradient(135deg, #1677ff, #722ed1);
 }
 
 .logo-text {

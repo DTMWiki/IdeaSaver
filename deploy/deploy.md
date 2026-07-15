@@ -75,10 +75,24 @@ sudo nano /etc/ideasaver/.env   # 填入实际配置
 IDEASAVER_DOGE_USER_ID=123456
 ```
 
+视频转码回调鉴权（生产环境必填；未设置时 production 会拒绝回调）：
+
+```env
+# 在多吉云回调 URL 后附加 ?secret=... 或请求头 X-Callback-Secret
+IDEASAVER_VIDEO_CALLBACK_SECRET=replace-with-long-random-secret
+```
+
 ## 6. 执行数据库迁移
 
 ```bash
 ideactl db migrate
+```
+
+配额对账（视频纳入存储后，建议执行一次以修正历史 `storage_used`）：
+
+```bash
+ideactl db recalc-storage
+# 或直接: /data/ideasaver/ideasaver recalc-storage
 ```
 
 ## 7. 部署 systemd 服务

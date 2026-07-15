@@ -9,6 +9,7 @@ interface CreateShareModalProps {
     onClose: () => void
 }
 
+// values are seconds; backend CreateShare uses expires_in as seconds
 const expiresOptions = [
     { label: '1 小时', value: 3600 },
     { label: '1 天', value: 86400 },
