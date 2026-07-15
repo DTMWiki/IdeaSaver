@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 
@@ -91,10 +92,10 @@ func Load() (*Config, error) {
 		DogeUserID:    getEnv("IDEASAVER_DOGE_USER_ID", ""),
 
 		MaxUploadSizeMB:      getEnvInt64("IDEASAVER_MAX_UPLOAD_SIZE_MB", 10240), // 10GB
-		MaxConcurrentUploads: int(getEnvInt64("IDEASAVER_MAX_CONCURRENT_UPLOADS", 10)),
+		MaxConcurrentUploads: getEnvIntClamped("IDEASAVER_MAX_CONCURRENT_UPLOADS", 10, 1, 10_000),
 		UploadRateLimitMBps:  getEnvFloat("IDEASAVER_UPLOAD_RATE_LIMIT_MBPS", 0),       // 0 = unlimited
 		DefaultQuotaBytes:    getEnvInt64("IDEASAVER_DEFAULT_QUOTA_BYTES", 5368709120), // 5GB
-		TrashRetentionDays:   int(getEnvInt64("IDEASAVER_TRASH_RETENTION_DAYS", 30)),
+		TrashRetentionDays:   getEnvIntClamped("IDEASAVER_TRASH_RETENTION_DAYS", 30, 1, 3650),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -122,6 +123,26 @@ func getEnvInt64(key string, defaultVal int64) int64 {
 		}
 	}
 	return defaultVal
+}
+
+// getEnvIntClamped parses an env value as int64 then clamps into [min,max] before
+// converting to int, avoiding incorrect integer conversion / overflow findings.
+func getEnvIntClamped(key string, defaultVal, min, max int) int {
+	if min > max {
+		min, max = max, min
+	}
+	v := getEnvInt64(key, int64(defaultVal))
+	if v < int64(min) {
+		return min
+	}
+	if v > int64(max) {
+		return max
+	}
+	// Safe: clamped into int range well below math.MaxInt.
+	if v > math.MaxInt || v < math.MinInt {
+		return defaultVal
+	}
+	return int(v)
 }
 
 func getEnvFloat(key string, defaultVal float64) float64 {
