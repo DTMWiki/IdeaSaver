@@ -3,6 +3,7 @@ import { List, Progress, Button, Space, Typography, Tooltip, Badge } from 'antd'
 import {
     PauseCircleOutlined,
     PlayCircleOutlined,
+    RedoOutlined,
     CloseOutlined,
     CopyOutlined,
     CheckCircleFilled,
@@ -22,7 +23,7 @@ import './UploadPanel.css'
 const { Text } = Typography
 
 export default function UploadPanel() {
-    const { tasks, panelVisible, setPanelVisible, pauseTask, resumeTask, removeTask, clearCompleted } =
+    const { tasks, panelVisible, setPanelVisible, pauseTask, resumeTask, retryTask, removeTask, clearCompleted } =
         useUploadStore()
     const [collapsed, setCollapsed] = useState(false)
     const { message } = App.useApp()
@@ -119,9 +120,16 @@ export default function UploadPanel() {
                                                 </>
                                             )}
                                             {task.status === 'failed' && (
-                                                <Tooltip title={task.error || '上传失败'}>
-                                                    <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />
-                                                </Tooltip>
+                                                <>
+                                                    <Tooltip title={task.error || '上传失败'}>
+                                                        <ExclamationCircleFilled style={{ color: '#ff4d4f' }} />
+                                                    </Tooltip>
+                                                    <Tooltip title="重新上传">
+                                                        <Button type="text" size="small" icon={<RedoOutlined />} onClick={() => retryTask(task.id)}>
+                                                            重试
+                                                        </Button>
+                                                    </Tooltip>
+                                                </>
                                             )}
                                             <Tooltip title="移除">
                                                 <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => removeTask(task.id)} />

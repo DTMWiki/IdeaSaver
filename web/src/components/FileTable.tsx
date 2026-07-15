@@ -7,6 +7,7 @@ import {
   Tag,
   Tooltip,
   Grid,
+  Empty,
 } from "antd";
 import type { Breakpoint } from "antd";
 import {
@@ -17,6 +18,7 @@ import {
   VideoCameraOutlined,
   FileOutlined,
   EllipsisOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import type { FileItem } from "@/types";
@@ -41,6 +43,7 @@ interface FileTableProps {
   onContextMenu: (e: React.MouseEvent, file: FileItem) => void;
   onPreview: (file: FileItem) => void;
   actionItems: (file: FileItem) => MenuProps["items"];
+  onUpload?: () => void;
 }
 
 function getFileIcon(file: FileItem) {
@@ -64,6 +67,7 @@ export default function FileTable({
   onContextMenu,
   onPreview,
   actionItems,
+  onUpload,
 }: FileTableProps) {
   const { toggleSelect, navigateTo } = useFileStore();
   const screens = Grid.useBreakpoint();
@@ -202,7 +206,17 @@ export default function FileTable({
         pagination={false}
         size={isMobile ? "small" : "middle"}
         scroll={isMobile ? { x: 520 } : undefined}
-        locale={{ emptyText: "此文件夹为空" }}
+        locale={{
+          emptyText: (
+            <Empty description="此文件夹为空">
+              {onUpload && (
+                <Button type="primary" icon={<UploadOutlined />} onClick={onUpload}>
+                  上传文件
+                </Button>
+              )}
+            </Empty>
+          ),
+        }}
         onRow={(record) => ({
           onClick: () => handleRowClick(record),
           onContextMenu: (e) => onContextMenu(e, record),

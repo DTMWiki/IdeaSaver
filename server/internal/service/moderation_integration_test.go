@@ -139,7 +139,7 @@ func TestShareServiceAccessShareBlockedWhenFileBanned(t *testing.T) {
 	db, mock, repos := newMockRepos(t)
 	defer db.Close()
 
-	svc := NewShareService(&config.Config{}, repos, nil)
+	svc := NewShareService(&config.Config{JWTSecret: "test-secret"}, repos, nil)
 	shareID := uuid.New()
 	fileID := uuid.New()
 	ownerID := uuid.New()
@@ -209,7 +209,7 @@ func TestShareServicePasswordRequired(t *testing.T) {
 	db, mock, repos := newMockRepos(t)
 	defer db.Close()
 
-	svc := NewShareService(&config.Config{}, repos, nil)
+	svc := NewShareService(&config.Config{JWTSecret: "test-secret"}, repos, nil)
 	shareID := uuid.New()
 	fileID := uuid.New()
 	ownerID := uuid.New()

@@ -1,5 +1,5 @@
 import client from './client'
-import type { Share, ShareFileView } from '@/types'
+import type { Share, ShareAccessResult, ShareFileView } from '@/types'
 
 export async function listShares(): Promise<Share[]> {
     const { data } = await client.get('/shares')
@@ -13,17 +13,28 @@ export async function deleteShare(id: string): Promise<void> {
 export async function accessShare(
     code: string,
     password?: string,
-): Promise<ShareFileView> {
-    const params: Record<string, string> = {}
-    if (password) params.password = password
-    const { data } = await client.get(`/shares/${code}`, { params })
-    return data.file
+): Promise<ShareAccessResult> {
+    const headers: Record<string, string> = {}
+    if (password) headers['X-Share-Password'] = password
+    // Password via header only — never query string.
+    const { data } = await client.get(`/shares/${encodeURIComponent(code)}`, { headers })
+    return {
+        file: data.file as ShareFileView,
+        download_token: data.download_token as string,
+        token_expires_in: Number(data.token_expires_in) || 0,
+    }
 }
 
-/** Authenticated download URL that re-checks share password/expiry server-side. */
-export function buildShareDownloadURL(code: string, password?: string): string {
-    const params = new URLSearchParams()
-    if (password) params.set('password', password)
-    const query = params.toString()
-    return `/api/shares/${encodeURIComponent(code)}/download${query ? `?${query}` : ''}`
+/**
+ * Build download URL using a short-lived token so the browser can stream
+ * large files natively (no full-file JS blob). Token is not the share password.
+ */
+export function buildShareDownloadURL(
+    code: string,
+    token: string,
+    options?: { inline?: boolean },
+): string {
+    const params = new URLSearchParams({ token })
+    if (options?.inline) params.set('inline', '1')
+    return `/api/shares/${encodeURIComponent(code)}/download?${params.toString()}`
 }

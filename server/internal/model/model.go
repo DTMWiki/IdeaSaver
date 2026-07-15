@@ -43,14 +43,16 @@ type File struct {
 
 // Share represents a share link for a file.
 type Share struct {
-	ID        uuid.UUID  `json:"id" db:"id"`
-	UserID    uuid.UUID  `json:"user_id" db:"user_id"`
-	FileID    uuid.UUID  `json:"file_id" db:"file_id"`
-	Code      string     `json:"code" db:"code"`
-	Password  string     `json:"-" db:"password"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty" db:"expires_at"`
-	ViewCount int        `json:"view_count" db:"view_count"`
-	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	ID          uuid.UUID  `json:"id" db:"id"`
+	UserID      uuid.UUID  `json:"user_id" db:"user_id"`
+	FileID      uuid.UUID  `json:"file_id" db:"file_id"`
+	Code        string     `json:"code" db:"code"`
+	Password    string     `json:"-" db:"password"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty" db:"expires_at"`
+	ViewCount   int        `json:"view_count" db:"view_count"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	FileName    string     `json:"file_name,omitempty" db:"file_name"`
+	HasPassword bool       `json:"has_password,omitempty" db:"has_password"`
 }
 
 // UploadTask represents a chunked upload task for resumable uploads.
