@@ -135,20 +135,13 @@ def summarize(label: str, resp: Dict[str, Any], preferred_bucket: str) -> None:
         sk = credentials.get("secretAccessKey")
         st = credentials.get("sessionToken")
         exp = credentials.get("expiredTime") or credentials.get("expiration")
-        if ak and sk and st:
-            # Never log secret material in clear text (code scanning / secret hygiene).
-            def _mask(value: object) -> str:
-                s = str(value or "")
-                if len(s) <= 8:
-                    return "***"
-                return f"{s[:4]}...{s[-4:]} (len={len(s)})"
-
-            print("[Extracted] temporary credentials (redacted):")
-            print(f"  accessKeyId={_mask(ak)}")
-            print(f"  secretAccessKey={_mask(sk)}")
-            print(f"  sessionToken={_mask(st)}")
-            if exp:
-                print(f"  expires={exp}")
+        # Never print secret values or substrings (CodeQL: py/clear-text-logging-sensitive-data).
+        print("[Extracted] temporary credentials:")
+        print(f"  accessKeyId present: {bool(ak)}")
+        print(f"  secretAccessKey present: {bool(sk)}")
+        print(f"  sessionToken present: {bool(st)}")
+        if exp is not None and exp != "":
+            print(f"  expires present: true")
 
 
 def main() -> int:
