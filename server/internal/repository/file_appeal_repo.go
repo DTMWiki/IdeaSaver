@@ -111,7 +111,8 @@ func (r *FileAppealRepository) List(ctx context.Context, status string, offset, 
 	}
 	defer rows.Close()
 
-	appeals := make([]model.FileAppeal, 0, limit)
+	// Fixed capacity only — never size the backing array from request-controlled limit.
+	appeals := make([]model.FileAppeal, 0, 64)
 	for rows.Next() {
 		var appeal model.FileAppeal
 		if err := rows.Scan(

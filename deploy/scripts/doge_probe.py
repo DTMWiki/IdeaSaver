@@ -135,13 +135,13 @@ def summarize(label: str, resp: Dict[str, Any], preferred_bucket: str) -> None:
         sk = credentials.get("secretAccessKey")
         st = credentials.get("sessionToken")
         exp = credentials.get("expiredTime") or credentials.get("expiration")
-        if ak and sk and st:
-            print("[Extracted] temporary credentials:")
-            print(f"  accessKeyId={ak}")
-            print(f"  secretAccessKey={sk}")
-            print(f"  sessionToken={st}")
-            if exp:
-                print(f"  expires={exp}")
+        # Never print secret values or substrings (CodeQL: py/clear-text-logging-sensitive-data).
+        print("[Extracted] temporary credentials:")
+        print(f"  accessKeyId present: {bool(ak)}")
+        print(f"  secretAccessKey present: {bool(sk)}")
+        print(f"  sessionToken present: {bool(st)}")
+        if exp is not None and exp != "":
+            print(f"  expires present: true")
 
 
 def main() -> int:

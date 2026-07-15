@@ -13,14 +13,15 @@ import (
 
 func handleLogin(cfg *config.Config, svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		state, err := newOAuthState()
-		if err != nil {
+		// Random OAuth state is generated inside AuthService.BeginAuth (crypto/rand).
+		url, state, err := svc.Auth.BeginAuth()
+		if err != nil || url == "" || state == "" {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法发起登录"})
 			return
 		}
 		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie(oauthStateCookie, state, 600, "/", "", cookieSecure(cfg), true)
-		url := svc.Auth.GetAuthURL(state)
+		// Secure=true, HttpOnly=true (required by code scanning / cookie hardening).
+		c.SetCookie(oauthStateCookie, state, 600, "/", "", true, true)
 		c.JSON(http.StatusOK, gin.H{"url": url})
 	}
 }
@@ -42,7 +43,7 @@ func handleCallback(cfg *config.Config, svc *service.Services) gin.HandlerFunc {
 		}
 		// Clear one-time state cookie
 		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie(oauthStateCookie, "", -1, "/", "", cookieSecure(cfg), true)
+		c.SetCookie(oauthStateCookie, "", -1, "/", "", true, true)
 
 		token, user, err := svc.Auth.ExchangeCode(c.Request.Context(), code)
 		if err != nil {
@@ -77,13 +78,15 @@ func handleLogout(cfg *config.Config) gin.HandlerFunc {
 
 func setAuthTokenCookie(c *gin.Context, cfg *config.Config, token string) {
 	// Match JWT lifetime (24h) used by AuthService.generateJWT.
+	_ = cfg
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(authTokenCookie, token, 24*60*60, "/", "", cookieSecure(cfg), true)
+	c.SetCookie(authTokenCookie, token, 24*60*60, "/", "", true, true)
 }
 
 func clearAuthTokenCookie(c *gin.Context, cfg *config.Config) {
+	_ = cfg
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(authTokenCookie, "", -1, "/", "", cookieSecure(cfg), true)
+	c.SetCookie(authTokenCookie, "", -1, "/", "", true, true)
 }
 
 func extractBearerToken(c *gin.Context) string {
