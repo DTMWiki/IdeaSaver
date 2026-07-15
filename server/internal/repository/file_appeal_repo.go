@@ -111,16 +111,8 @@ func (r *FileAppealRepository) List(ctx context.Context, status string, offset, 
 	}
 	defer rows.Close()
 
-	// Cap prealloc so untrusted/high limit query params cannot allocate excessive memory.
-	const maxPrealloc = 200
-	prealloc := limit
-	if prealloc < 0 {
-		prealloc = 0
-	}
-	if prealloc > maxPrealloc {
-		prealloc = maxPrealloc
-	}
-	appeals := make([]model.FileAppeal, 0, prealloc)
+	// Fixed capacity only — never size the backing array from request-controlled limit.
+	appeals := make([]model.FileAppeal, 0, 64)
 	for rows.Next() {
 		var appeal model.FileAppeal
 		if err := rows.Scan(

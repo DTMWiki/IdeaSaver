@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/gin-gonic/gin"
@@ -66,14 +65,10 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func cookieSecure(cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	if cfg.Environment == "production" {
-		return true
-	}
-	return strings.HasPrefix(strings.ToLower(cfg.PublicBaseURL), "https://")
+// cookieSecure is always true so session/auth cookies never travel over cleartext HTTP.
+// Local development should use HTTPS or localhost (treated as secure by modern browsers).
+func cookieSecure(_ *config.Config) bool {
+	return true
 }
 
 func newOAuthState() (string, error) {
