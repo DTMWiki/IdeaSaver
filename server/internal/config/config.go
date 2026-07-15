@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 
@@ -125,22 +124,25 @@ func getEnvInt64(key string, defaultVal int64) int64 {
 	return defaultVal
 }
 
-// getEnvIntClamped parses an env value as int64 then clamps into [min,max] before
-// converting to int, avoiding incorrect integer conversion / overflow findings.
+// getEnvIntClamped parses env with bitSize 32 so conversion to int is safe.
 func getEnvIntClamped(key string, defaultVal, min, max int) int {
 	if min > max {
 		min, max = max, min
 	}
-	v := getEnvInt64(key, int64(defaultVal))
+	raw := os.Getenv(key)
+	if raw == "" {
+		return defaultVal
+	}
+	// Parse as 32-bit signed — avoids incorrect conversion from 64-bit ParseInt to int.
+	v, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return defaultVal
+	}
 	if v < int64(min) {
 		return min
 	}
 	if v > int64(max) {
 		return max
-	}
-	// Safe: clamped into int range well below math.MaxInt.
-	if v > math.MaxInt || v < math.MinInt {
-		return defaultVal
 	}
 	return int(v)
 }
