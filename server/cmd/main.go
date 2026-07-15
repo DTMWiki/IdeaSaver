@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
@@ -27,13 +28,24 @@ func main() {
 	}
 	defer db.Close()
 
-	// Run migrations if requested
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		if err := repository.Migrate(db); err != nil {
-			log.Fatalf("Migration failed: %v", err)
+	// One-shot CLI modes (no HTTP server)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrate":
+			if err := repository.Migrate(db); err != nil {
+				log.Fatalf("Migration failed: %v", err)
+			}
+			log.Println("Migration completed successfully")
+			return
+		case "recalc-storage":
+			repos := repository.NewRepositories(db)
+			n, err := repos.Users.RecalcAllStorageUsed(context.Background())
+			if err != nil {
+				log.Fatalf("Recalc storage failed: %v", err)
+			}
+			log.Printf("Recalculated storage_used for %d user(s)", n)
+			return
 		}
-		log.Println("Migration completed successfully")
-		return
 	}
 
 	// Initialize storage clients

@@ -6,9 +6,22 @@ export async function getLoginURL(): Promise<string> {
     return data.url
 }
 
-export async function exchangeCode(code: string): Promise<{ token: string; user: User }> {
-    const { data } = await client.get('/auth/callback', { params: { code } })
+export async function exchangeCode(
+    code: string,
+    state?: string | null,
+): Promise<{ user: User }> {
+    const params: Record<string, string> = { code }
+    if (state) params.state = state
+    const { data } = await client.get('/auth/callback', { params })
     return data
+}
+
+export async function logoutSession(): Promise<void> {
+    try {
+        await client.post('/auth/logout')
+    } catch {
+        // Best-effort cookie clear
+    }
 }
 
 export async function getMe(): Promise<User> {

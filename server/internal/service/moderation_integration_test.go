@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestShareServiceDeleteSharePermissionDenied(t *testing.T) {
 		}).AddRow(shareID, ownerID, fileID, "abcdef", "", nil, 0, now))
 
 	err := svc.DeleteShare(context.Background(), shareID, callerID)
-	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if !errors.Is(err, ErrPermission) {
 		t.Fatalf("expected permission denied, got: %v", err)
 	}
 
@@ -150,20 +151,101 @@ func TestShareServiceAccessShareBlockedWhenFileBanned(t *testing.T) {
 			"id", "user_id", "file_id", "code", "password", "expires_at", "view_count", "created_at",
 		}).AddRow(shareID, ownerID, fileID, "public-code", "", nil, 0, now))
 
-	mock.ExpectExec(`UPDATE shares SET view_count = view_count \+ 1 WHERE id = \$1`).
-		WithArgs(shareID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
 	mock.ExpectQuery(`FROM files WHERE id = \$1`).
 		WithArgs(fileID).
 		WillReturnRows(makeFileRows(fileID, ownerID, "banned", "违规资源"))
 
 	_, err := svc.AccessShare(context.Background(), "public-code", "")
-	if err == nil || !strings.Contains(err.Error(), "已被封禁") {
+	if !errors.Is(err, ErrShareBanned) {
 		t.Fatalf("expected banned error, got: %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestShareServiceExpiresInUsesSeconds(t *testing.T) {
+	db, mock, repos := newMockRepos(t)
+	defer db.Close()
+
+	svc := NewShareService(&config.Config{}, repos, nil)
+	fileID := uuid.New()
+	userID := uuid.New()
+	shareID := uuid.New()
+	now := time.Now()
+
+	mock.ExpectQuery(`FROM files WHERE id = \$1`).
+		WithArgs(fileID).
+		WillReturnRows(makeFileRows(fileID, userID, "normal", ""))
+
+	mock.ExpectQuery(`INSERT INTO shares`).
+		WithArgs(userID, fileID, sqlmock.AnyArg(), "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(shareID, now))
+
+	mock.ExpectQuery(`INSERT INTO audit_logs`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(1), now))
+
+	share, err := svc.CreateShare(context.Background(), userID, &CreateShareRequest{
+		FileID:    fileID,
+		ExpiresIn: 3600,
+	})
+	if err != nil {
+		t.Fatalf("CreateShare error: %v", err)
+	}
+	if share.ExpiresAt == nil {
+		t.Fatal("expected expires_at")
+	}
+	delta := share.ExpiresAt.Sub(now)
+	if delta < 50*time.Minute || delta > 70*time.Minute {
+		t.Fatalf("expires_in=3600 should mean ~1 hour, got %v", delta)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestShareServicePasswordRequired(t *testing.T) {
+	db, mock, repos := newMockRepos(t)
+	defer db.Close()
+
+	svc := NewShareService(&config.Config{}, repos, nil)
+	shareID := uuid.New()
+	fileID := uuid.New()
+	ownerID := uuid.New()
+	now := time.Now()
+
+	mock.ExpectQuery(`FROM shares WHERE code = \$1`).
+		WithArgs("secret-code").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "user_id", "file_id", "code", "password", "expires_at", "view_count", "created_at",
+		}).AddRow(shareID, ownerID, fileID, "secret-code", "hunter2", nil, 0, now))
+
+	_, err := svc.AccessShare(context.Background(), "secret-code", "")
+	if !errors.Is(err, ErrSharePasswordRequired) {
+		t.Fatalf("expected password_required, got: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestHashAndCheckSharePassword(t *testing.T) {
+	hashed, err := hashSharePassword("s3cret!")
+	if err != nil {
+		t.Fatalf("hash error: %v", err)
+	}
+	if hashed == "" || hashed == "s3cret!" {
+		t.Fatalf("expected bcrypt hash, got %q", hashed)
+	}
+	if !checkSharePassword(hashed, "s3cret!") {
+		t.Fatal("bcrypt check should succeed")
+	}
+	if checkSharePassword(hashed, "wrong") {
+		t.Fatal("bcrypt check should fail for wrong password")
+	}
+	// legacy plaintext
+	if !checkSharePassword("plain", "plain") {
+		t.Fatal("legacy plaintext should still verify")
 	}
 }

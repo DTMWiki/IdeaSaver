@@ -11,85 +11,19 @@ import { useVideoStore } from '@/stores/videoStore'
 import { getPlayInfo, type VideoPlayInfo } from '@/api/videos'
 import { useUploadStore } from '@/stores/uploadStore'
 import { formatBytes, formatDate, copyToClipboard } from '@/utils/format'
+import {
+    buildDogeIframeCode,
+    firstNonEmptyString,
+    loadDogePlayerScript,
+    normalizeDimension,
+    playerUserIDFromPlayURL,
+    resolveDogePlayer,
+    type DogePlayerInstance,
+} from '@/utils/dogePlayer'
 import VideoThumbnail from '@/components/VideoThumbnail'
 import type { Video } from '@/types'
 
 const { Title, Text } = Typography
-
-const DOGE_PLAYER_SCRIPT = 'https://player.dogecloud.com/js/loader'
-let dogePlayerLoader: Promise<void> | null = null
-
-type DogePlayerOptions = {
-    container: HTMLDivElement
-    vcode: string
-    userId: number
-    autoPlay?: boolean
-}
-
-type DogePlayerInstance = {
-    destroy?: () => void
-}
-
-type DogePlayerConstructor = new (options: DogePlayerOptions) => DogePlayerInstance
-
-type DogePlayerWindow = Window & {
-    DogePlayer?: DogePlayerConstructor
-    DogeCloudPlayer?: DogePlayerConstructor
-    default?: DogePlayerConstructor
-}
-
-function resolveDogePlayer() {
-    const playerWindow = window as DogePlayerWindow
-    return playerWindow.DogePlayer || playerWindow.DogeCloudPlayer || playerWindow.default || null
-}
-
-function waitForDogePlayer(timeoutMs = 5000) {
-    const start = Date.now()
-    return new Promise<void>((resolve, reject) => {
-        const tick = () => {
-            if (resolveDogePlayer()) {
-                resolve()
-                return
-            }
-            if (Date.now() - start >= timeoutMs) {
-                reject(new Error('DogePlayer 构造器未暴露到全局对象'))
-                return
-            }
-            window.setTimeout(tick, 100)
-        }
-        tick()
-    })
-}
-
-function loadDogePlayerScript() {
-    if (dogePlayerLoader) return dogePlayerLoader
-
-    const loaderPromise = new Promise<void>((resolve, reject) => {
-        if (resolveDogePlayer()) {
-            resolve()
-            return
-        }
-
-        const existing = document.querySelector('script[data-doge-player-sdk="true"]') as HTMLScriptElement | null
-        if (existing) {
-            existing.remove()
-        }
-
-        const script = document.createElement('script')
-        script.type = 'text/javascript'
-        script.src = DOGE_PLAYER_SCRIPT
-        script.setAttribute('data-doge-player-sdk', 'true')
-        script.onload = () => { waitForDogePlayer().then(resolve).catch(reject) }
-        script.onerror = () => reject(new Error('加载 DogePlayer 脚本失败'))
-        document.head.appendChild(script)
-    }).catch((error) => {
-        dogePlayerLoader = null
-        throw error
-    })
-
-    dogePlayerLoader = loaderPromise
-    return dogePlayerLoader
-}
 
 export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
@@ -122,7 +56,7 @@ export default function VideoPage() {
         const sdkUserIDNum = Number(sdkUserID)
 
         if (!vcode || !sdkUserID || Number.isNaN(sdkUserIDNum) || sdkUserIDNum <= 0) {
-            return 'DogePlayer 缺少固定 userId，请在服务端配置 IDEASAVER_DOGE_USER_ID'
+            return '播放器配置异常，请联系管理员'
         }
         return null
     }, [playInfo])
@@ -176,7 +110,7 @@ export default function VideoPage() {
 
                 const DogePlayer = resolveDogePlayer()
                 if (!DogePlayer) {
-                    setSdkError('DogePlayer SDK 未成功注入，请稍后重试或检查 player.dogecloud.com 连通性')
+                    setSdkError('播放器加载失败，请稍后重试')
                     setSdkLoading(false)
                     return
                 }
@@ -190,13 +124,13 @@ export default function VideoPage() {
                     })
                     setSdkLoading(false)
                 } catch {
-                    setSdkError('DogePlayer 初始化失败，请检查 VCode 与多吉云用户 ID 配置')
+                    setSdkError('播放器初始化失败，请稍后重试或联系管理员')
                     setSdkLoading(false)
                 }
             })
             .catch(() => {
                 if (!disposed) {
-                    setSdkError('DogePlayer 脚本加载失败。官方播放器不支持本地部署，请确保可访问 player.dogecloud.com')
+                    setSdkError('无法加载播放器，请检查网络后重试')
                     setSdkLoading(false)
                 }
             })
@@ -291,7 +225,7 @@ export default function VideoPage() {
                 playerUserIDFromPlayURL(video.play_url),
             )
             if (!vcode || !playerUserId) {
-                setShareMessage('当前视频缺少 VCode 或多吉云 userId，暂时无法生成分享链接')
+                setShareMessage('当前视频尚未就绪，暂时无法生成分享链接')
                 return
             }
 
@@ -376,7 +310,7 @@ export default function VideoPage() {
                                                 <Text type="secondary" style={{ fontSize: 12 }}>{formatBytes(video.size)}</Text>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>{formatDate(video.created_at)}</Text>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>
-                                                    VCode: {video.vcode || '-'}
+                                                    播放码: {video.vcode || '-'}
                                                 </Text>
                                                 <Text type="secondary" style={{ fontSize: 12 }}>
                                                     播放次数: {video.play_count ?? 0}
@@ -431,7 +365,7 @@ export default function VideoPage() {
                             <Alert
                                 type="info"
                                 showIcon
-                                message={playInfo.message || '视频转码中，请等待多吉云回调完成后再播放'}
+                                message={playInfo.message || '视频转码中，请稍后再试'}
                             />
                         )}
                         {playInfo.ready && (sdkRequirementError || sdkError) && (
@@ -444,7 +378,7 @@ export default function VideoPage() {
                         {playInfo.ready ? (
                             (sdkRequirementError || sdkError) ? (
                                 <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-                                    官方 DogePlayer 未能启动，当前已停止回退到原生直链播放器。
+                                    播放器未能启动，请稍后重试或联系管理员。
                                 </div>
                         ) : (
                             <div style={{ position: 'relative' }}>
@@ -456,7 +390,7 @@ export default function VideoPage() {
                                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
                                         <Space direction="vertical" size={12} align="center">
                                             <Spin />
-                                            <Text style={{ color: '#fff' }}>正在加载 DogePlayer...</Text>
+                                            <Text style={{ color: '#fff' }}>正在加载播放器...</Text>
                                         </Space>
                                     </div>
                                 )}
@@ -464,7 +398,7 @@ export default function VideoPage() {
                         )
                         ) : (
                             <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-                                视频转码中，收到多吉云 `msg=transcode` 回调后会自动允许播放。
+                                视频转码中，完成后即可播放。
                             </div>
                         )}
                     </Space>
@@ -491,7 +425,7 @@ export default function VideoPage() {
                     <Alert
                         type={shareContext ? 'success' : 'info'}
                         showIcon
-                        message="使用嵌入代码接入多吉云播放器"
+                        message="使用嵌入代码接入播放器"
                         description="你已开启防盗链时，不建议再暴露直接访问地址。这里默认只提供可复制的 iframe 嵌入代码。"
                     />
                     <div>
@@ -499,7 +433,7 @@ export default function VideoPage() {
                         <ol style={{ margin: '8px 0 0', paddingInlineStart: 18, color: 'rgba(71,85,105,0.92)' }}>
                             <li>复制下方 iframe 代码，粘贴到支持 HTML 的页面中。</li>
                             <li>若系统支持 Markdown 中嵌入 HTML，可直接使用这段代码。</li>
-                            <li>如果视频仍在转码，请等待多吉云回调完成后再复制。</li>
+                            <li>如果视频仍在转码，请等待完成后再复制。</li>
                         </ol>
                     </div>
                     {shareLoading ? (
@@ -571,60 +505,4 @@ function renderTranscodeTag(video: Video) {
     default:
         return <Tag>排队中</Tag>
     }
-}
-
-function firstNonEmptyString(...values: Array<string | undefined>) {
-    for (const value of values) {
-        const v = value?.trim()
-        if (v) {
-            return v
-        }
-    }
-    return ''
-}
-
-function playerUserIDFromPlayURL(raw?: string) {
-    const value = raw?.trim()
-    if (!value) return ''
-    try {
-        const u = new URL(value)
-        return firstNonEmptyString(
-            u.searchParams.get('userId') ?? '',
-            u.searchParams.get('userid') ?? '',
-            u.searchParams.get('uid') ?? '',
-        )
-    } catch {
-        return ''
-    }
-}
-
-function buildDogeShareURL(vcode: string, userId: string, options?: { autoPlay?: boolean; inFrame?: boolean }) {
-    const nextVCode = vcode.trim()
-    const nextUserId = userId.trim()
-    if (!nextVCode || !nextUserId) return ''
-
-    const params = new URLSearchParams({
-        vcode: nextVCode,
-        userId: nextUserId,
-    })
-    if (options?.autoPlay) {
-        params.set('autoPlay', 'true')
-    }
-    if (options?.inFrame) {
-        params.set('inFrame', 'true')
-    }
-    return `https://player.dogecloud.com/web/player.html?${params.toString()}`
-}
-
-function buildDogeIframeCode(input: { vcode: string; userId: string; autoPlay: boolean; width: string; height: string }) {
-    const src = buildDogeShareURL(input.vcode, input.userId, {
-        autoPlay: input.autoPlay,
-        inFrame: true,
-    })
-    return `<iframe id="dogePlayerFrame" src="${src}" allowfullscreen="true" msallowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" oallowfullscreen="true" allowtransparency="true" scrolling="no" width="${input.width}" height="${input.height}" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerPolicy="unsafe-url"></iframe>`
-}
-
-function normalizeDimension(value: string, fallback: string) {
-    const next = value.trim()
-    return next || fallback
 }

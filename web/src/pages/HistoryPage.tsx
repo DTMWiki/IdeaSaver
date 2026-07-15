@@ -285,7 +285,7 @@ const DETAIL_LABELS: Record<string, string> = {
   new_name: "新名称",
   title: "标题",
   vid: "VID",
-  vcode: "VCode",
+  vcode: "播放码",
   status: "状态",
   ready: "就绪",
   transcode_status: "转码状态",

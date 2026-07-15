@@ -46,7 +46,7 @@ export default function QuotaIndicator({ compact = false }: QuotaIndicatorProps)
         <div>
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                    存储空间
+                    存储空间（文件+视频）
                 </Text>
                 <Progress
                     percent={percent}

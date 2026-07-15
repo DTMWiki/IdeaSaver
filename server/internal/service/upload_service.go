@@ -121,7 +121,7 @@ func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userI
 		return err
 	}
 	if task.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if task.Status == "paused" {
 		return fmt.Errorf("上传已暂停")
@@ -161,7 +161,7 @@ func (s *UploadService) PauseUpload(ctx context.Context, taskID uuid.UUID, userI
 		return err
 	}
 	if task.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	return s.repos.UploadTasks.UpdateStatus(ctx, taskID, "paused")
 }
@@ -173,7 +173,7 @@ func (s *UploadService) ResumeUpload(ctx context.Context, taskID uuid.UUID, user
 		return err
 	}
 	if task.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if task.Status != "paused" {
 		return fmt.Errorf("任务不在暂停状态")
@@ -188,7 +188,18 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 		return nil, err
 	}
 	if task.UserID != userID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
+	}
+	// Idempotent: retries must not create duplicate files or re-bill quota.
+	if task.Status == "completed" {
+		file, findErr := s.repos.Files.FindByStorageKey(ctx, task.StorageKey)
+		if findErr != nil {
+			return nil, fmt.Errorf("上传已完成，但文件记录不存在")
+		}
+		return file, nil
+	}
+	if task.Status == "failed" {
+		return nil, fmt.Errorf("上传任务已失败，请重新上传")
 	}
 
 	// Complete multipart upload if applicable

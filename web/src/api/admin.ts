@@ -105,6 +105,11 @@ export async function updateUserQuota(
   await client.put(`/admin/users/${id}/quota`, { quota });
 }
 
+export async function recalcAllStorage(): Promise<number> {
+  const { data } = await client.post("/admin/users/recalc-storage");
+  return data.users_updated ?? 0;
+}
+
 export async function cleanupTrash(): Promise<number> {
   const { data } = await client.delete("/admin/trash/cleanup");
   return data.cleaned;

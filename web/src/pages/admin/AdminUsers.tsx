@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Table, Button, Typography, Empty, App, Pagination, InputNumber, Modal, Tag, Space, Grid } from 'antd'
 import type { Breakpoint } from 'antd'
-import { EditOutlined } from '@ant-design/icons'
+import { EditOutlined, CalculatorOutlined } from '@ant-design/icons'
 import type { User } from '@/types'
-import { listUsers, updateUserQuota } from '@/api/admin'
+import { listUsers, updateUserQuota, recalcAllStorage } from '@/api/admin'
 import { formatBytes, formatDate } from '@/utils/format'
 
 const { Title, Text } = Typography
@@ -57,6 +57,16 @@ export default function AdminUsers() {
         }
     }
 
+    const handleRecalcStorage = async () => {
+        try {
+            const n = await recalcAllStorage()
+            message.success(`已重新计算 ${n} 个用户的存储占用（文件+视频）`)
+            fetchUsers(page)
+        } catch {
+            message.error('配额对账失败')
+        }
+    }
+
     const columns = [
         { title: '用户名', dataIndex: 'username', key: 'username', width: 140 },
         { title: '显示名', dataIndex: 'display_name', key: 'display_name', ellipsis: true },
@@ -105,7 +115,12 @@ export default function AdminUsers() {
 
     return (
         <div className="fade-in">
-            <Title level={4} style={{ marginBottom: 16 }}>用户管理</Title>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                <Title level={4} style={{ margin: 0 }}>用户管理</Title>
+                <Button icon={<CalculatorOutlined />} onClick={() => { void handleRecalcStorage() }}>
+                    重新计算存储占用
+                </Button>
+            </div>
             <div className="page-card">
                 <Table
                     dataSource={users}

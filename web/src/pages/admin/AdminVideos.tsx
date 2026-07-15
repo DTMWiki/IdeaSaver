@@ -32,6 +32,12 @@ import {
   adminSetVideoStatus,
 } from "@/api/admin";
 import { formatBytes, formatDate, copyToClipboard } from "@/utils/format";
+import {
+  buildDogeIframeCode,
+  firstNonEmptyString,
+  normalizeDimension,
+  playerUserIDFromPlayURL,
+} from "@/utils/dogePlayer";
 import VideoThumbnail from "@/components/VideoThumbnail";
 
 const { Title, Text } = Typography;
@@ -146,7 +152,7 @@ export default function AdminVideos() {
         playerUserIDFromPlayURL(video.play_url),
       );
       if (!vcode || !playerUserId) {
-        setShareMessage("当前视频缺少 VCode 或多吉云用户 ID，暂时无法生成分享链接。");
+        setShareMessage("当前视频尚未就绪，暂时无法生成分享链接。");
         return;
       }
 
@@ -213,7 +219,7 @@ export default function AdminVideos() {
               {record.title}
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              VCode: {record.vcode || "-"}
+              播放码: {record.vcode || "-"}
             </Text>
             <br />
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -339,7 +345,7 @@ export default function AdminVideos() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onPressEnter={() => void fetchVideos(1, keyword)}
-            placeholder="搜索视频名 / VCode / 用户名"
+            placeholder="搜索视频名 / 播放码 / 用户名"
             allowClear
             style={{ width: isMobile ? "100%" : 260 }}
           />
@@ -430,7 +436,7 @@ export default function AdminVideos() {
           <Alert
             type={shareContext ? "success" : "info"}
             showIcon
-            message="使用嵌入代码接入多吉云播放器"
+            message="使用嵌入代码接入播放器"
             description="已开启防盗链时，不建议继续暴露直达地址。这里默认只提供 iframe 嵌入代码。"
           />
           <div>
@@ -438,7 +444,7 @@ export default function AdminVideos() {
             <ol style={{ margin: "8px 0 0", paddingInlineStart: 18, color: "rgba(71,85,105,0.9)" }}>
               <li>复制下方 iframe 代码，粘贴到支持 HTML 的页面中。</li>
               <li>若系统支持 Markdown 中嵌入 HTML，可直接使用这段代码。</li>
-              <li>若视频仍在转码中，请等待多吉云回调完成后再复制。</li>
+              <li>若视频仍在转码中，请等待完成后再复制。</li>
             </ol>
           </div>
           {shareLoading ? (
@@ -524,47 +530,4 @@ function renderTranscodeTag(status: Video["transcode_status"]) {
     default:
       return <Tag>排队中</Tag>;
   }
-}
-
-function firstNonEmptyString(...values: Array<string | undefined>) {
-  for (const value of values) {
-    const next = value?.trim();
-    if (next) {
-      return next;
-    }
-  }
-  return "";
-}
-
-function playerUserIDFromPlayURL(raw?: string) {
-  const value = raw?.trim();
-  if (!value) return "";
-  try {
-    const u = new URL(value);
-    return firstNonEmptyString(
-      u.searchParams.get("userId") ?? "",
-      u.searchParams.get("userid") ?? "",
-      u.searchParams.get("uid") ?? "",
-    );
-  } catch {
-    return "";
-  }
-}
-
-function buildDogeIframeCode(input: { vcode: string; userId: string; autoPlay: boolean; width: string; height: string }) {
-  const params = new URLSearchParams({
-    vcode: input.vcode.trim(),
-    userId: input.userId.trim(),
-    inFrame: "true",
-  });
-  if (input.autoPlay) {
-    params.set("autoPlay", "true");
-  }
-  const src = `https://player.dogecloud.com/web/player.html?${params.toString()}`;
-  return `<iframe id="dogePlayerFrame" src="${src}" allowfullscreen="true" msallowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" oallowfullscreen="true" allowtransparency="true" scrolling="no" width="${input.width}" height="${input.height}" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerPolicy="unsafe-url"></iframe>`;
-}
-
-function normalizeDimension(value: string, fallback: string) {
-  const next = value.trim();
-  return next || fallback;
 }

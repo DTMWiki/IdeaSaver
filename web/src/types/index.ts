@@ -33,6 +33,14 @@ export interface FileItem {
     updated_at: string
 }
 
+/** Public-safe shared file projection (no storage_key / public_url). */
+export interface ShareFileView {
+    name: string
+    size: number
+    mime_type?: string
+    is_image: boolean
+}
+
 export interface Share {
     id: string
     user_id: string
