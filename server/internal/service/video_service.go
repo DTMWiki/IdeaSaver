@@ -454,7 +454,8 @@ func (s *VideoService) GetPlayURL(ctx context.Context, id uuid.UUID, userID uuid
 		return "", err
 	}
 	if !info.Ready {
-		return "", fmt.Errorf(firstNonEmptyTrim(info.Message, "播放地址尚未就绪"))
+		msg := firstNonEmptyTrim(info.Message, "播放地址尚未就绪")
+		return "", fmt.Errorf("%s", msg)
 	}
 	if strings.TrimSpace(info.PlayURL) == "" {
 		return "", fmt.Errorf("播放地址尚未就绪")
