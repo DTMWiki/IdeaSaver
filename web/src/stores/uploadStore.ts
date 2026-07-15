@@ -18,6 +18,7 @@ interface UploadState {
     syncVideoTask: (videoId: string, transcodeStatus: string, message?: string, vcode?: string) => void
     pauseTask: (id: string) => void
     resumeTask: (id: string) => void
+    retryTask: (id: string) => void
     removeTask: (id: string) => void
     clearCompleted: () => void
 }
@@ -146,6 +147,32 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         processQueue()
     },
 
+    retryTask: (id: string) => {
+        const task = get().tasks.find((item) => item.id === id)
+        if (!task || task.status !== 'failed') return
+
+        // Failed tasks restart from scratch with a fresh server task / video upload.
+        set((state) => ({
+            tasks: state.tasks.map((item) =>
+                item.id === id
+                    ? {
+                        ...item,
+                        taskId: undefined,
+                        status: 'pending' as const,
+                        error: undefined,
+                        progress: 0,
+                        uploadedSize: 0,
+                        uploadedChunks: 0,
+                        speed: 0,
+                        phase: item.targetType === 'video' ? 'uploading' as const : item.phase,
+                        detail: item.targetType === 'video' ? '准备重新上传' : '准备重试',
+                    }
+                    : item,
+            ),
+        }))
+        processQueue()
+    },
+
     removeTask: (id: string) => {
         set((state) => ({
             tasks: state.tasks.filter((item) => item.id !== id),
@@ -153,8 +180,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     },
 
     clearCompleted: () => {
+        // Only remove successful uploads; keep failed so users can still retry.
         set((state) => ({
-            tasks: state.tasks.filter((item) => item.status !== 'completed' && item.status !== 'failed'),
+            tasks: state.tasks.filter((item) => item.status !== 'completed'),
         }))
     },
 }))

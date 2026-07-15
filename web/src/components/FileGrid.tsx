@@ -7,6 +7,7 @@ import {
   VideoCameraOutlined,
   FileOutlined,
   EllipsisOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import type { FileItem } from "@/types";
@@ -28,6 +29,7 @@ interface FileGridProps {
   onContextMenu: (e: React.MouseEvent, file: FileItem) => void;
   onPreview: (file: FileItem) => void;
   actionItems: (file: FileItem) => MenuProps["items"];
+  onUpload?: () => void;
 }
 
 function getGridIcon(file: FileItem) {
@@ -50,6 +52,7 @@ export default function FileGrid({
   onContextMenu,
   onPreview,
   actionItems,
+  onUpload,
 }: FileGridProps) {
   const { toggleSelect, navigateTo } = useFileStore();
 
@@ -79,7 +82,13 @@ export default function FileGrid({
   if (files.length === 0) {
     return (
       <div className="file-list-container empty-state">
-        <Empty description="此文件夹为空" />
+        <Empty description="此文件夹为空">
+          {onUpload && (
+            <Button type="primary" icon={<UploadOutlined />} onClick={onUpload}>
+              上传文件
+            </Button>
+          )}
+        </Empty>
       </div>
     );
   }

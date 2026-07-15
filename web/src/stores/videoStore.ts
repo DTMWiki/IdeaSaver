@@ -9,12 +9,17 @@ interface VideoState {
     page: number
     pageSize: number
 
-    fetchVideos: (page?: number) => Promise<void>
+    /** silent=true refreshes without full-page spinner (used while polling transcode). */
+    fetchVideos: (page?: number, options?: { silent?: boolean }) => Promise<void>
     uploadVideo: (file: File, title?: string, options?: videosApi.UploadVideoOptions) => Promise<void>
     toggleStatus: (id: string, currentStatus: number) => Promise<void>
     deleteVideo: (id: string) => Promise<void>
     batchDelete: (ids: string[]) => Promise<void>
     setPage: (page: number) => void
+}
+
+function isPendingTranscode(status?: string) {
+    return status !== 'ready' && status !== 'failed' && status !== 'blocked'
 }
 
 export const useVideoStore = create<VideoState>((set, get) => ({
@@ -24,10 +29,14 @@ export const useVideoStore = create<VideoState>((set, get) => ({
     page: 1,
     pageSize: 20,
 
-    fetchVideos: async (page?: number) => {
+    fetchVideos: async (page?: number, options?: { silent?: boolean }) => {
         const p = page ?? get().page
         const { pageSize } = get()
-        set({ loading: true, page: p })
+        if (!options?.silent) {
+            set({ loading: true, page: p })
+        } else {
+            set({ page: p })
+        }
         try {
             const { videos, total } = await videosApi.listVideos((p - 1) * pageSize, pageSize)
             set({ videos, total, loading: false })
@@ -65,6 +74,8 @@ export const useVideoStore = create<VideoState>((set, get) => ({
     },
 
     setPage: (page: number) => {
-        get().fetchVideos(page)
+        void get().fetchVideos(page)
     },
 }))
+
+export { isPendingTranscode }

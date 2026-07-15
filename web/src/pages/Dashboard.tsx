@@ -200,6 +200,7 @@ export default function Dashboard() {
           onContextMenu={handleContextMenu}
           onPreview={actions.setPreviewFile}
           actionItems={actions.fileActionItems}
+          onUpload={handleUploadClick}
         />
       ) : (
         <FileGrid
@@ -209,6 +210,7 @@ export default function Dashboard() {
           onContextMenu={handleContextMenu}
           onPreview={actions.setPreviewFile}
           actionItems={actions.fileActionItems}
+          onUpload={handleUploadClick}
         />
       )}
 

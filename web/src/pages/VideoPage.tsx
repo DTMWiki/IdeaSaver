@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag, Input, Grid } from 'antd'
+import { Card, Row, Col, Button, Space, Typography, Switch, Popconfirm, Empty, Spin, Modal, App, Pagination, Alert, Tag, Input, Grid, Checkbox, Dropdown } from 'antd'
+import type { MenuProps } from 'antd'
 import {
     UploadOutlined,
     PlayCircleOutlined,
     DeleteOutlined,
-    ShareAltOutlined,
+    CodeOutlined,
     CopyOutlined,
+    MoreOutlined,
 } from '@ant-design/icons'
-import { useVideoStore } from '@/stores/videoStore'
+import { isPendingTranscode, useVideoStore } from '@/stores/videoStore'
 import { getPlayInfo, type VideoPlayInfo } from '@/api/videos'
 import { useUploadStore } from '@/stores/uploadStore'
 import { formatBytes, formatDate, copyToClipboard } from '@/utils/format'
 import {
     buildDogeIframeCode,
+    buildDogeShareURL,
     firstNonEmptyString,
     loadDogePlayerScript,
     normalizeDimension,
@@ -28,6 +31,7 @@ const { Title, Text } = Typography
 export default function VideoPage() {
     const { videos, total, loading, page, pageSize, fetchVideos, toggleStatus, deleteVideo, batchDelete, setPage } = useVideoStore()
     const addVideoFiles = useUploadStore((state) => state.addVideoFiles)
+    const syncVideoTask = useUploadStore((state) => state.syncVideoTask)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const playerContainerRef = useRef<HTMLDivElement | null>(null)
     const [playerContainerTick, setPlayerContainerTick] = useState(0)
@@ -38,13 +42,17 @@ export default function VideoPage() {
     const [playInfo, setPlayInfo] = useState<VideoPlayInfo | null>(null)
     const [sdkError, setSdkError] = useState<string | null>(null)
     const [sdkLoading, setSdkLoading] = useState(false)
-    const [shareVideo, setShareVideo] = useState<Video | null>(null)
-    const [shareLoading, setShareLoading] = useState(false)
-    const [shareContext, setShareContext] = useState<{ vcode: string; userId: string } | null>(null)
-    const [shareMessage, setShareMessage] = useState('')
-    const [shareAutoPlay, setShareAutoPlay] = useState(false)
-    const [shareWidth, setShareWidth] = useState('')
-    const [shareHeight, setShareHeight] = useState('')
+    const [embedVideo, setEmbedVideo] = useState<Video | null>(null)
+    const [embedLoading, setEmbedLoading] = useState(false)
+    const [embedContext, setEmbedContext] = useState<{ vcode: string; userId: string } | null>(null)
+    const [embedMessage, setEmbedMessage] = useState('')
+    const [embedAutoPlay, setEmbedAutoPlay] = useState(false)
+    const [embedWidth, setEmbedWidth] = useState('')
+    const [embedHeight, setEmbedHeight] = useState('')
+    const hasPendingTranscode = useMemo(
+        () => videos.some((v) => isPendingTranscode(v.transcode_status)),
+        [videos],
+    )
     const sdkRequirementError = useMemo(() => {
         if (!playInfo?.ready) return null
 
@@ -60,23 +68,39 @@ export default function VideoPage() {
         }
         return null
     }, [playInfo])
-    const shareIframeCode = useMemo(() => {
-        if (!shareContext) return ''
+    const embedIframeCode = useMemo(() => {
+        if (!embedContext) return ''
         return buildDogeIframeCode({
-            vcode: shareContext.vcode,
-            userId: shareContext.userId,
-            autoPlay: shareAutoPlay,
-            width: normalizeDimension(shareWidth, '600'),
-            height: normalizeDimension(shareHeight, '400'),
+            vcode: embedContext.vcode,
+            userId: embedContext.userId,
+            autoPlay: embedAutoPlay,
+            width: normalizeDimension(embedWidth, '600'),
+            height: normalizeDimension(embedHeight, '400'),
         })
-    }, [shareAutoPlay, shareContext, shareHeight, shareWidth])
+    }, [embedAutoPlay, embedContext, embedHeight, embedWidth])
 
     const attachPlayerContainer = useCallback((node: HTMLDivElement | null) => {
         playerContainerRef.current = node
         setPlayerContainerTick((value) => value + 1)
     }, [])
 
-    useEffect(() => { fetchVideos(1) }, [fetchVideos])
+    useEffect(() => { void fetchVideos(1) }, [fetchVideos])
+
+    // Poll while any video on the page is still transcoding (silent refresh).
+    useEffect(() => {
+        if (!hasPendingTranscode) return
+        const timer = window.setInterval(() => {
+            void fetchVideos(undefined, { silent: true }).then(() => {
+                const latest = useVideoStore.getState().videos
+                for (const video of latest) {
+                    if (video.transcode_status === 'ready' || video.transcode_status === 'failed' || video.transcode_status === 'blocked') {
+                        syncVideoTask(video.id, video.transcode_status, video.transcode_message, video.vcode)
+                    }
+                }
+            })
+        }, 5000)
+        return () => window.clearInterval(timer)
+    }, [hasPendingTranscode, fetchVideos, syncVideoTask])
 
     useEffect(() => {
         if (!playInfo || !playInfo.ready) return
@@ -161,15 +185,13 @@ export default function VideoPage() {
     const handlePlay = async (id: string) => {
         try {
             setSdkError(null)
-            setSdkLoading(false)
+            setSdkLoading(true)
             const info = await getPlayInfo(id)
+            // Open modal as the single feedback surface (avoid toast + modal double noise).
+            setPlayInfo(info)
             if (!info.ready) {
                 setSdkLoading(false)
-                message.info(info.message || '视频仍在转码处理中，请稍后重试')
-            } else {
-                setSdkLoading(true)
             }
-            setPlayInfo(info)
         } catch (error: unknown) {
             setSdkLoading(false)
             const maybeMessage = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -201,19 +223,19 @@ export default function VideoPage() {
         setSelectedIds(next)
     }
 
-    const handleShare = async (video: Video) => {
-        setShareVideo(video)
-        setShareLoading(true)
-        setShareContext(null)
-        setShareMessage('')
-        setShareAutoPlay(false)
-        setShareWidth('')
-        setShareHeight('')
+    const handleEmbed = async (video: Video) => {
+        setEmbedVideo(video)
+        setEmbedLoading(true)
+        setEmbedContext(null)
+        setEmbedMessage('')
+        setEmbedAutoPlay(false)
+        setEmbedWidth('')
+        setEmbedHeight('')
 
         try {
             const info = await getPlayInfo(video.id)
             if (!info.ready) {
-                setShareMessage(info.message || '视频仍在转码中，暂时不能生成分享链接')
+                setEmbedMessage(info.message || '视频仍在转码中，暂时不能生成嵌入代码')
                 return
             }
 
@@ -225,18 +247,79 @@ export default function VideoPage() {
                 playerUserIDFromPlayURL(video.play_url),
             )
             if (!vcode || !playerUserId) {
-                setShareMessage('当前视频尚未就绪，暂时无法生成分享链接')
+                setEmbedMessage('当前视频尚未就绪，暂时无法生成嵌入代码')
                 return
             }
 
-            setShareVideo({ ...video, play_count: info.play_count ?? video.play_count })
-            setShareContext({ vcode, userId: playerUserId })
+            setEmbedVideo({ ...video, play_count: info.play_count ?? video.play_count })
+            setEmbedContext({ vcode, userId: playerUserId })
         } catch (error: unknown) {
             const maybeMessage = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
-            setShareMessage(maybeMessage || '生成分享链接失败')
+            setEmbedMessage(maybeMessage || '生成嵌入代码失败')
         } finally {
-            setShareLoading(false)
+            setEmbedLoading(false)
         }
+    }
+
+    const videoCardActions = (video: Video) => {
+        if (isMobile) {
+            const items: MenuProps['items'] = [
+                {
+                    key: 'play',
+                    icon: <PlayCircleOutlined />,
+                    label: '播放',
+                    onClick: () => { void handlePlay(video.id) },
+                },
+                {
+                    key: 'embed',
+                    icon: <CodeOutlined />,
+                    label: '网页嵌入',
+                    onClick: () => { void handleEmbed(video) },
+                },
+                {
+                    key: 'delete',
+                    icon: <DeleteOutlined />,
+                    label: '删除',
+                    danger: true,
+                    onClick: () => {
+                        modal.confirm({
+                            title: '删除此视频？',
+                            content: '删除后不可恢复，并释放占用的存储配额',
+                            okText: '删除',
+                            okType: 'danger',
+                            cancelText: '取消',
+                            onOk: () => deleteVideo(video.id),
+                        })
+                    },
+                },
+            ]
+            return [
+                <Dropdown key="more" menu={{ items }} trigger={['click']}>
+                    <Button type="text" icon={<MoreOutlined />}>
+                        更多
+                    </Button>
+                </Dropdown>,
+            ]
+        }
+
+        return [
+            <Button type="text" icon={<CodeOutlined />} onClick={() => { void handleEmbed(video) }} key="embed">
+                嵌入
+            </Button>,
+            <Button type="text" icon={<PlayCircleOutlined />} onClick={() => { void handlePlay(video.id) }} key="play">
+                播放
+            </Button>,
+            <Popconfirm
+                key="del"
+                title="删除此视频？"
+                description="删除后不可恢复，并释放占用的存储配额"
+                onConfirm={() => { void deleteVideo(video.id) }}
+            >
+                <Button type="text" danger icon={<DeleteOutlined />}>
+                    删除
+                </Button>
+            </Popconfirm>,
+        ]
     }
 
     return (
@@ -258,9 +341,19 @@ export default function VideoPage() {
             {loading && videos.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
             ) : videos.length === 0 ? (
-                <Empty description="暂无视频" />
+                <Empty description="还没有视频">
+                    <Button type="primary" icon={<UploadOutlined />} onClick={handleUpload}>
+                        上传第一个视频
+                    </Button>
+                </Empty>
             ) : (
                 <>
+                    <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                        点击封面即可播放；批量操作请勾选右上角。转码中的视频会自动刷新状态。
+                        {hasPendingTranscode && (
+                            <Tag color="processing" style={{ marginLeft: 8 }}>转码状态自动更新中</Tag>
+                        )}
+                    </Text>
                     <Row gutter={[16, 16]}>
                         {videos.map((video) => (
                             <Col xs={24} sm={12} lg={8} xl={6} key={video.id}>
@@ -268,33 +361,40 @@ export default function VideoPage() {
                                     hoverable
                                     style={{ borderColor: selectedIds.has(video.id) ? '#1677ff' : undefined }}
                                     cover={(
-                                        <VideoThumbnail
-                                            src={video.thumbnail_small_url || video.thumbnail_url}
-                                            alt={video.title}
-                                            height={160}
-                                            borderRadius={0}
-                                            iconSize={30}
-                                        />
+                                        <div style={{ position: 'relative' }}>
+                                            <div
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => { void handlePlay(video.id) }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault()
+                                                        void handlePlay(video.id)
+                                                    }
+                                                }}
+                                                style={{ cursor: 'pointer' }}
+                                            >
+                                                <VideoThumbnail
+                                                    src={video.thumbnail_small_url || video.thumbnail_url}
+                                                    alt={video.title}
+                                                    height={160}
+                                                    borderRadius={0}
+                                                    iconSize={30}
+                                                />
+                                            </div>
+                                            <div
+                                                style={{ position: 'absolute', top: 8, right: 8, zIndex: 2 }}
+                                                onClick={(e) => e.stopPropagation()}
+                                            >
+                                                <Checkbox
+                                                    checked={selectedIds.has(video.id)}
+                                                    onChange={() => toggleSelect(video.id)}
+                                                    style={{ background: 'rgba(255,255,255,0.9)', borderRadius: 4, padding: '2px 4px' }}
+                                                />
+                                            </div>
+                                        </div>
                                     )}
-                                    onClick={() => toggleSelect(video.id)}
-                                    actions={[
-                                        <Button type="text" icon={<ShareAltOutlined />} onClick={(e) => { e.stopPropagation(); handleShare(video) }} key="share">
-                                            分享
-                                        </Button>,
-                                        <Button type="text" icon={<PlayCircleOutlined />} onClick={(e) => { e.stopPropagation(); handlePlay(video.id) }} key="play">
-                                            {!isMobile ? '播放' : null}
-                                        </Button>,
-                                        <Popconfirm
-                                            key="del"
-                                            title="删除此视频？"
-                                            onConfirm={(e) => { e?.stopPropagation(); deleteVideo(video.id) }}
-                                            onCancel={(e) => e?.stopPropagation()}
-                                        >
-                                            <Button type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
-                                                {!isMobile ? '删除' : null}
-                                            </Button>
-                                        </Popconfirm>,
-                                    ]}
+                                    actions={videoCardActions(video)}
                                 >
                                     <Card.Meta
                                         title={(
@@ -377,28 +477,52 @@ export default function VideoPage() {
                         )}
                         {playInfo.ready ? (
                             (sdkRequirementError || sdkError) ? (
-                                <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-                                    播放器未能启动，请稍后重试或联系管理员。
-                                </div>
-                        ) : (
-                            <div style={{ position: 'relative' }}>
-                                <div
-                                    ref={attachPlayerContainer}
-                                    style={{ width: '100%', minHeight: 420, background: '#000' }}
-                                />
-                                {sdkLoading && (
-                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-                                        <Space direction="vertical" size={12} align="center">
-                                            <Spin />
-                                            <Text style={{ color: '#fff' }}>正在加载播放器...</Text>
+                                // Official DogeCloud web player as fallback (docs: player.html?vcode&userId)
+                                (() => {
+                                    const userId = firstNonEmptyString(
+                                        playInfo.player_user_id,
+                                        playerUserIDFromPlayURL(playInfo.play_url),
+                                    )
+                                    const src = buildDogeShareURL(playInfo.vcode || '', userId, { autoPlay: true })
+                                    if (!src) {
+                                        return (
+                                            <div style={{ width: '100%', minHeight: 280, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+                                                {sdkRequirementError || sdkError || '播放器未能启动，请稍后重试'}
+                                            </div>
+                                        )
+                                    }
+                                    return (
+                                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                            <Alert type="warning" showIcon message="本地播放器加载失败，已切换官方网页播放器" />
+                                            <iframe
+                                                title="视频播放"
+                                                src={src}
+                                                style={{ width: '100%', minHeight: isMobile ? 240 : 420, border: 0, background: '#000' }}
+                                                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                                                allowFullScreen
+                                            />
                                         </Space>
-                                    </div>
-                                )}
-                            </div>
-                        )
+                                    )
+                                })()
+                            ) : (
+                                <div style={{ position: 'relative' }}>
+                                    <div
+                                        ref={attachPlayerContainer}
+                                        style={{ width: '100%', minHeight: isMobile ? 240 : 420, background: '#000' }}
+                                    />
+                                    {sdkLoading && (
+                                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                                            <Space direction="vertical" size={12} align="center">
+                                                <Spin />
+                                                <Text style={{ color: '#fff' }}>正在加载播放器...</Text>
+                                            </Space>
+                                        </div>
+                                    )}
+                                </div>
+                            )
                         ) : (
-                            <div style={{ width: '100%', minHeight: 420, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-                                视频转码中，完成后即可播放。
+                            <div style={{ width: '100%', minHeight: 200, background: '#0b1220', color: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+                                {playInfo.message || '视频转码中，完成后即可播放。可稍后再点封面重试。'}
                             </div>
                         )}
                     </Space>
@@ -406,16 +530,16 @@ export default function VideoPage() {
             </Modal>
 
             <Modal
-                title={shareVideo ? `分享视频：${shareVideo.title}` : '分享视频'}
-                open={!!shareVideo}
+                title={embedVideo ? `网页嵌入：${embedVideo.title}` : '网页嵌入'}
+                open={!!embedVideo}
                 onCancel={() => {
-                    setShareVideo(null)
-                    setShareLoading(false)
-                    setShareContext(null)
-                    setShareMessage('')
-                    setShareAutoPlay(false)
-                    setShareWidth('')
-                    setShareHeight('')
+                    setEmbedVideo(null)
+                    setEmbedLoading(false)
+                    setEmbedContext(null)
+                    setEmbedMessage('')
+                    setEmbedAutoPlay(false)
+                    setEmbedWidth('')
+                    setEmbedHeight('')
                 }}
                 footer={null}
                 width={isMobile ? 'calc(100vw - 24px)' : 700}
@@ -423,34 +547,34 @@ export default function VideoPage() {
             >
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     <Alert
-                        type={shareContext ? 'success' : 'info'}
+                        type={embedContext ? 'success' : 'info'}
                         showIcon
-                        message="使用嵌入代码接入播放器"
-                        description="你已开启防盗链时，不建议再暴露直接访问地址。这里默认只提供可复制的 iframe 嵌入代码。"
+                        message="这是网页嵌入码，不是文件外链分享"
+                        description="与「我的分享」中的文件分享不同：这里生成的是多吉云播放器 iframe，适合贴到博客/Wiki。若要发文件给他人下载，请在文件管理里创建分享链接。"
                     />
                     <div>
-                        <Text strong>使用方法（Markdown / HTML 嵌入）</Text>
+                        <Text strong>怎么用</Text>
                         <ol style={{ margin: '8px 0 0', paddingInlineStart: 18, color: 'rgba(71,85,105,0.92)' }}>
-                            <li>复制下方 iframe 代码，粘贴到支持 HTML 的页面中。</li>
-                            <li>若系统支持 Markdown 中嵌入 HTML，可直接使用这段代码。</li>
-                            <li>如果视频仍在转码，请等待完成后再复制。</li>
+                            <li>复制下方 iframe 代码，贴进支持 HTML 的网页。</li>
+                            <li>需要自动播放或调整尺寸时，改选项后重新复制。</li>
+                            <li>转码未完成时无法生成；本页会自动刷新转码状态。</li>
                         </ol>
                     </div>
-                    {shareLoading ? (
+                    {embedLoading ? (
                         <Alert type="info" showIcon message="正在生成嵌入代码..." />
-                    ) : shareContext ? (
+                    ) : embedContext ? (
                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                            <Text type="secondary">播放次数：{shareVideo?.play_count ?? 0}</Text>
+                            <Text type="secondary">播放次数：{embedVideo?.play_count ?? 0}</Text>
                             <Space wrap size={12} style={{ width: '100%' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <Text type="secondary">自动播放</Text>
-                                    <Switch checked={shareAutoPlay} onChange={setShareAutoPlay} />
+                                    <Switch checked={embedAutoPlay} onChange={setEmbedAutoPlay} />
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <Text type="secondary">宽度</Text>
                                     <Input
-                                        value={shareWidth}
-                                        onChange={(e) => setShareWidth(e.target.value.replace(/[^\d]/g, ''))}
+                                        value={embedWidth}
+                                        onChange={(e) => setEmbedWidth(e.target.value.replace(/[^\d]/g, ''))}
                                         placeholder="600"
                                         style={{ width: isMobile ? '100%' : 120 }}
                                     />
@@ -458,8 +582,8 @@ export default function VideoPage() {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <Text type="secondary">高度</Text>
                                     <Input
-                                        value={shareHeight}
-                                        onChange={(e) => setShareHeight(e.target.value.replace(/[^\d]/g, ''))}
+                                        value={embedHeight}
+                                        onChange={(e) => setEmbedHeight(e.target.value.replace(/[^\d]/g, ''))}
                                         placeholder="400"
                                         style={{ width: isMobile ? '100%' : 120 }}
                                     />
@@ -472,19 +596,19 @@ export default function VideoPage() {
                                     size="small"
                                     style={{ position: 'absolute', top: 12, right: 12, zIndex: 1 }}
                                     onClick={async () => {
-                                        await copyToClipboard(shareIframeCode)
+                                        await copyToClipboard(embedIframeCode)
                                         message.success('嵌入代码已复制')
                                     }}
                                 >
                                     复制
                                 </Button>
                                 <pre style={{ margin: 0, padding: '52px 16px 16px', color: '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13, lineHeight: 1.6 }}>
-                                    <code>{shareIframeCode}</code>
+                                    <code>{embedIframeCode}</code>
                                 </pre>
                             </div>
                         </Space>
                     ) : (
-                        <Alert type="warning" showIcon message={shareMessage || '当前视频暂不可分享'} />
+                        <Alert type="warning" showIcon message={embedMessage || '当前视频暂不可嵌入'} />
                     )}
                 </Space>
             </Modal>

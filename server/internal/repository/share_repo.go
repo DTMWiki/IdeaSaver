@@ -62,8 +62,13 @@ func (r *ShareRepository) IncrementViewCount(ctx context.Context, id uuid.UUID) 
 
 func (r *ShareRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.Share, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, file_id, code, password, expires_at, view_count, created_at
-		 FROM shares WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT s.id, s.user_id, s.file_id, s.code, s.password, s.expires_at, s.view_count, s.created_at,
+		        COALESCE(f.name, '') AS file_name,
+		        CASE WHEN COALESCE(s.password, '') <> '' THEN TRUE ELSE FALSE END AS has_password
+		 FROM shares s
+		 LEFT JOIN files f ON f.id = s.file_id
+		 WHERE s.user_id = $1
+		 ORDER BY s.created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +78,11 @@ func (r *ShareRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]m
 	for rows.Next() {
 		var s model.Share
 		if err := rows.Scan(&s.ID, &s.UserID, &s.FileID, &s.Code, &s.Password,
-			&s.ExpiresAt, &s.ViewCount, &s.CreatedAt); err != nil {
+			&s.ExpiresAt, &s.ViewCount, &s.CreatedAt, &s.FileName, &s.HasPassword); err != nil {
 			return nil, err
 		}
+		// Never expose raw password material in list payloads.
+		s.Password = ""
 		shares = append(shares, s)
 	}
 	return shares, nil
