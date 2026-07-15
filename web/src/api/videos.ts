@@ -31,7 +31,7 @@ export async function uploadVideo(
 
     const { data } = await client.post('/videos/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 300000, // 5 min for large videos
+        timeout: 30 * 60 * 1000, // 30 min for large videos
         onUploadProgress: (event) => {
             if (!event.total || !options?.onProgress) return
             const percent = Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100)))

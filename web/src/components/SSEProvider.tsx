@@ -10,7 +10,7 @@ interface SSEProviderProps {
 }
 
 export default function SSEProvider({ children }: SSEProviderProps) {
-    const { token } = useAuthStore()
+    const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
     const { refresh } = useFileStore()
     const refreshVideos = useVideoStore((state) => state.fetchVideos)
     const syncVideoTask = useUploadStore((state) => state.syncVideoTask)
@@ -19,10 +19,9 @@ export default function SSEProvider({ children }: SSEProviderProps) {
     const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     useEffect(() => {
-        if (!token) return
+        if (!isLoggedIn) return
 
         function connect() {
-            // Clean up previous connection
             if (eventSourceRef.current) {
                 eventSourceRef.current.close()
             }
@@ -31,7 +30,8 @@ export default function SSEProvider({ children }: SSEProviderProps) {
                 reconnectTimerRef.current = null
             }
 
-            const es = new EventSource(`/api/events?token=${token}`)
+            // Cookie session is sent automatically for same-origin EventSource.
+            const es = new EventSource('/api/events')
             eventSourceRef.current = es
 
             es.onopen = () => {
@@ -89,7 +89,6 @@ export default function SSEProvider({ children }: SSEProviderProps) {
                     return
                 }
                 es.close()
-                // Reconnect after 5 seconds
                 if (reconnectTimerRef.current) {
                     clearTimeout(reconnectTimerRef.current)
                 }
@@ -107,7 +106,7 @@ export default function SSEProvider({ children }: SSEProviderProps) {
                 clearTimeout(reconnectTimerRef.current)
             }
         }
-    }, [token, notification, refresh, refreshVideos, syncVideoTask])
+    }, [isLoggedIn, notification, refresh, refreshVideos, syncVideoTask])
 
     return <>{children}</>
 }

@@ -25,11 +25,17 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// AuthTokenCookie is the HttpOnly cookie used for SSE and same-origin browser auth.
+const AuthTokenCookie = "ideasaver_token"
+
 // Auth verifies JWT token and injects user info into context.
+// Token resolution order: Authorization Bearer → HttpOnly cookie.
+// Query-string tokens are intentionally unsupported (log/referrer leakage).
 func Auth(cfg *config.Config, userRepo *repository.UserRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
 		tokenStr := ""
+
+		authHeader := c.GetHeader("Authorization")
 		if authHeader != "" {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 			if tokenStr == authHeader {
@@ -39,10 +45,12 @@ func Auth(cfg *config.Config, userRepo *repository.UserRepository) gin.HandlerFu
 			}
 		}
 
-		// EventSource/fetch image preview cannot set custom Authorization header.
-		if tokenStr == "" && c.Request.Method == http.MethodGet {
-			tokenStr = c.Query("token")
+		if tokenStr == "" {
+			if cookie, err := c.Cookie(AuthTokenCookie); err == nil {
+				tokenStr = strings.TrimSpace(cookie)
+			}
 		}
+
 		if tokenStr == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录，请先登录"})
 			c.Abort()
@@ -126,16 +134,6 @@ func CORS(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		c.Next()
-	}
-}
-
-// RateLimit implements a simple rate limiter for upload endpoints.
-// In production, consider using a more sophisticated approach with Redis.
-func RateLimit(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// TODO: Implement token bucket rate limiting
-		// For now, just pass through
 		c.Next()
 	}
 }

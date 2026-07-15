@@ -31,6 +31,8 @@ export async function uploadChunk(
 
     await client.post(`/upload/${taskId}/chunk`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        // Chunk uploads need a longer budget than default API calls.
+        timeout: 10 * 60 * 1000,
         onUploadProgress: (e) => {
             if (onProgress && e.loaded) {
                 onProgress(e.loaded)

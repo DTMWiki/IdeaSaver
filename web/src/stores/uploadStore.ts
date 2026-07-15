@@ -278,8 +278,8 @@ async function processVideoTask(task: UploadFileTask) {
                 speed,
                 phase: progress.phase === 'processing' ? 'processing' : 'uploading',
                 detail: progress.phase === 'processing'
-                    ? '文件已送达，等待多吉云建立转码任务'
-                    : '正在上传到业务服务器',
+                    ? '文件已送达，等待转码任务创建'
+                    : '正在上传',
             })
         },
     })
@@ -291,7 +291,7 @@ async function processVideoTask(task: UploadFileTask) {
         uploadedSize: task.totalSize,
         uploadedChunks: 1,
         phase: 'waiting_transcode',
-        detail: '视频已上传，等待多吉云转码回调后可播放',
+        detail: '视频已上传，转码完成后可播放',
         videoId: video.id,
         vcode: video.vcode || undefined,
     })

@@ -54,6 +54,14 @@ func NewVideoService(cfg *config.Config, repos *repository.Repositories, vcloud 
 
 // UploadVideo uploads a video to DogeCloud VCloud.
 func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title string, reader io.Reader, filename string, size int64) (*model.Video, error) {
+	user, err := s.repos.Users.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if user.StorageUsed+size > user.StorageQuota {
+		return nil, fmt.Errorf("存储配额不足，剩余 %d 字节", user.StorageQuota-user.StorageUsed)
+	}
+
 	callbackStr := fmt.Sprintf("user:%s", userID.String())
 
 	vid, err := s.vcloud.UploadVideo(title, reader, filename, size, callbackStr)
@@ -76,6 +84,8 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 	if err := s.repos.Videos.Create(ctx, video); err != nil {
 		return nil, err
 	}
+
+	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, size)
 
 	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
 		UserID:     userID,
@@ -197,7 +207,7 @@ func (s *VideoService) SetVideoStatus(ctx context.Context, id uuid.UUID, userID 
 		return err
 	}
 	if video.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 
 	dogeStatus := 0
@@ -234,13 +244,17 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 		return err
 	}
 	if video.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 
 	_ = s.vcloud.DeleteVideos([]string{video.VID})
 
 	if err := s.repos.Videos.Delete(ctx, id); err != nil {
 		return err
+	}
+
+	if video.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -video.Size)
 	}
 
 	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
@@ -251,6 +265,7 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 		Details: map[string]any{
 			"title": video.Title,
 			"vid":   video.VID,
+			"size":  video.Size,
 		},
 	})
 
@@ -261,19 +276,22 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, userID uuid.UUID) error {
 	var vids []string
 	var deleted []map[string]any
+	var totalSize int64
 	for _, id := range ids {
 		video, err := s.repos.Videos.FindByID(ctx, id)
 		if err != nil {
 			continue
 		}
 		if video.UserID != userID {
-			return fmt.Errorf("permission denied for video %s", id)
+			return fmt.Errorf("%w: video %s", ErrPermission, id)
 		}
 		vids = append(vids, video.VID)
+		totalSize += video.Size
 		deleted = append(deleted, map[string]any{
 			"id":    video.ID.String(),
 			"title": video.Title,
 			"vid":   video.VID,
+			"size":  video.Size,
 		})
 	}
 
@@ -283,6 +301,10 @@ func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, u
 
 	if err := s.repos.Videos.BatchDelete(ctx, ids); err != nil {
 		return err
+	}
+
+	if totalSize > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -totalSize)
 	}
 
 	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
@@ -308,10 +330,10 @@ func (s *VideoService) GetPlayInfoForActor(ctx context.Context, id uuid.UUID, ac
 		return nil, err
 	}
 	if actor == nil {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 	if actor.Role != "admin" && video.UserID != actor.ID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 
 	video, _ = s.refreshPlaybackMeta(ctx, video, viewerIP, userAgent)
@@ -352,7 +374,7 @@ func (s *VideoService) GetPlayInfoForViewer(ctx context.Context, id uuid.UUID, u
 		return nil, err
 	}
 	if video.UserID != userID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 
 	video, _ = s.refreshPlaybackMeta(ctx, video, viewerIP, userAgent)
@@ -392,10 +414,10 @@ func (s *VideoService) SetVideoStatusForActor(ctx context.Context, id uuid.UUID,
 		return err
 	}
 	if actor == nil {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if actor.Role != "admin" && video.UserID != actor.ID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 
 	dogeStatus := 0

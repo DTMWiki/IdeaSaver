@@ -34,7 +34,7 @@ func (s *FileService) GetFileByID(ctx context.Context, id, userID uuid.UUID) (*m
 		return nil, err
 	}
 	if file.UserID != userID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 	if file.DeletedAt != nil {
 		return nil, fmt.Errorf("file deleted")
@@ -48,10 +48,10 @@ func (s *FileService) GetFileForActor(ctx context.Context, id uuid.UUID, actor *
 		return nil, err
 	}
 	if actor == nil {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 	if actor.Role != "admin" && file.UserID != actor.ID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 	if file.DeletedAt != nil {
 		return nil, fmt.Errorf("file deleted")
@@ -98,7 +98,7 @@ func (s *FileService) Rename(ctx context.Context, fileID uuid.UUID, userID uuid.
 		return err
 	}
 	if file.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	newName, err = ensureUniqueFileName(ctx, s.repos.Files, userID, file.ParentID, newName, &fileID)
 	if err != nil {
@@ -121,7 +121,7 @@ func (s *FileService) Move(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		return err
 	}
 	if file.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if err := s.repos.Files.Move(ctx, fileID, newParentID); err != nil {
 		return err
@@ -141,7 +141,7 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		return nil, err
 	}
 	if src.UserID != userID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 
 	newKey := generateStorageKey(userID.String(), src.Name)
@@ -195,7 +195,7 @@ func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID u
 		return err
 	}
 	if file.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if err := s.repos.Files.SoftDelete(ctx, fileID); err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid
 		return err
 	}
 	if file.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 	if err := s.repos.Files.Restore(ctx, fileID); err != nil {
 		return err
@@ -231,7 +231,7 @@ func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, use
 		return err
 	}
 	if file.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermission
 	}
 
 	// Delete from OSS
@@ -271,7 +271,7 @@ func (s *FileService) GetFileURL(ctx context.Context, fileID uuid.UUID, userID u
 		return "", "", err
 	}
 	if file.UserID != userID {
-		return "", "", fmt.Errorf("permission denied")
+		return "", "", ErrPermission
 	}
 
 	return buildFileURLResponse(file)
@@ -283,10 +283,10 @@ func (s *FileService) GetFileURLForActor(ctx context.Context, fileID uuid.UUID, 
 		return "", "", err
 	}
 	if actor == nil {
-		return "", "", fmt.Errorf("permission denied")
+		return "", "", ErrPermission
 	}
 	if actor.Role != "admin" && file.UserID != actor.ID {
-		return "", "", fmt.Errorf("permission denied")
+		return "", "", ErrPermission
 	}
 
 	return buildFileURLResponse(file)
@@ -321,7 +321,7 @@ func (s *FileService) SubmitAppeal(ctx context.Context, fileID, userID uuid.UUID
 		return nil, err
 	}
 	if file.UserID != userID {
-		return nil, fmt.Errorf("permission denied")
+		return nil, ErrPermission
 	}
 	if file.ModerationStatus != "banned" {
 		return nil, fmt.Errorf("该文件当前未被封禁")

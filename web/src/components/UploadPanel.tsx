@@ -145,7 +145,7 @@ export default function UploadPanel() {
                                             )}
                                             {task.vcode && (
                                                 <Text type="secondary" style={{ fontSize: 12 }}>
-                                                    VCode: {task.vcode}
+                                                    播放码: {task.vcode}
                                                 </Text>
                                             )}
                                         </Space>

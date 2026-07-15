@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Spin, Result, Button } from 'antd'
 import { useAuthStore } from '@/stores/authStore'
@@ -7,21 +7,28 @@ export default function LoginCallback() {
     const [searchParams] = useSearchParams()
     const navigate = useNavigate()
     const { handleCallback, isLoggedIn } = useAuthStore()
+    const [error, setError] = useState<string | null>(null)
+    const [submitting, setSubmitting] = useState(false)
+
+    const code = searchParams.get('code')
+    const state = searchParams.get('state')
 
     useEffect(() => {
-        const code = searchParams.get('code')
-        if (!code) return
+        if (!code || submitting || isLoggedIn || error) return
 
-        handleCallback(code)
+        setSubmitting(true)
+        handleCallback(code, state)
             .then(() => {
                 navigate('/dashboard', { replace: true })
             })
-            .catch(() => {
-                // Error is handled in state
+            .catch((err: unknown) => {
+                const msg =
+                    (err as { message?: string })?.message ||
+                    '登录失败，请重试'
+                setError(msg)
+                setSubmitting(false)
             })
-    }, [searchParams, handleCallback, navigate])
-
-    const code = searchParams.get('code')
+    }, [code, state, handleCallback, navigate, submitting, isLoggedIn, error])
 
     if (!code) {
         return (
@@ -31,6 +38,23 @@ export default function LoginCallback() {
                     title="登录失败"
                     subTitle="缺少授权码参数"
                     extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>}
+                />
+            </div>
+        )
+    }
+
+    if (error) {
+        return (
+            <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Result
+                    status="error"
+                    title="登录失败"
+                    subTitle={error}
+                    extra={
+                        <Button type="primary" onClick={() => navigate('/')}>
+                            返回首页重新登录
+                        </Button>
+                    }
                 />
             </div>
         )

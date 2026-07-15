@@ -18,6 +18,8 @@ import {
     MoonOutlined,
     FlagOutlined,
 } from '@ant-design/icons'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faLightbulb } from '@fortawesome/free-solid-svg-icons'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import QuotaIndicator from '@/components/QuotaIndicator'
@@ -162,7 +164,9 @@ export default function AppLayout() {
                     onBreakpoint={(broken) => setCollapsed(broken)}
                 >
                     <div className="sider-logo" onClick={() => navigate('/dashboard')}>
-                        <span className="logo-icon">💡</span>
+                        <span className="logo-mark" aria-hidden="true">
+                            <FontAwesomeIcon icon={faLightbulb} />
+                        </span>
                         {!collapsed && <span className="logo-text">IdeaSaver</span>}
                     </div>
 

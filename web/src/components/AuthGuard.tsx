@@ -4,19 +4,20 @@ import { Spin } from 'antd'
 import { useAuthStore } from '@/stores/authStore'
 
 /**
- * Route guard that requires authentication.
- * Redirects to home page if not logged in.
+ * Route guard that requires authentication via HttpOnly session cookie.
  */
 export default function AuthGuard() {
-    const { isLoggedIn, user, loading, fetchMe } = useAuthStore()
+    const { isLoggedIn, user, loading, bootstrapped, bootstrap } = useAuthStore()
 
     useEffect(() => {
-        if (isLoggedIn && !user && !loading) {
-            void fetchMe()
+        if (!bootstrapped) {
+            void bootstrap()
+        } else if (isLoggedIn && !user && !loading) {
+            void bootstrap()
         }
-    }, [isLoggedIn, user, loading, fetchMe])
+    }, [bootstrapped, isLoggedIn, user, loading, bootstrap])
 
-    if (isLoggedIn && (!user || loading)) {
+    if (!bootstrapped || loading) {
         return (
             <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Spin size="large" tip="加载中..." />

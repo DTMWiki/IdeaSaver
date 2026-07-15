@@ -49,6 +49,23 @@ func (s *AdminService) UpdateUserQuota(ctx context.Context, userID uuid.UUID, qu
 	return s.repos.Users.UpdateQuota(ctx, userID, quota)
 }
 
+// RecalcAllStorageUsed recomputes storage_used for all users (files + videos).
+func (s *AdminService) RecalcAllStorageUsed(ctx context.Context, adminID uuid.UUID) (int64, error) {
+	n, err := s.repos.Users.RecalcAllStorageUsed(ctx)
+	if err != nil {
+		return 0, err
+	}
+	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
+		UserID:   adminID,
+		Action:   "admin_recalc_storage",
+		Resource: "user",
+		Details: map[string]any{
+			"users_updated": n,
+		},
+	})
+	return n, nil
+}
+
 // DeleteFile permanently deletes any file (admin).
 func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
@@ -90,6 +107,10 @@ func (s *AdminService) DeleteVideo(ctx context.Context, videoID, adminID uuid.UU
 
 	if err := s.repos.Videos.Delete(ctx, videoID); err != nil {
 		return err
+	}
+
+	if video.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, video.UserID, -video.Size)
 	}
 
 	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{

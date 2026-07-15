@@ -44,9 +44,8 @@ export default function FilePreview({ file, onClose }: FilePreviewProps) {
     async function loadPreview() {
       setLoading(true);
       try {
-        const token = localStorage.getItem("token") || "";
         const response = await fetch(`/api/files/${fileID}/preview`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          credentials: "include",
         });
 
         if (!response.ok) {
