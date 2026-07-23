@@ -114,6 +114,11 @@ func (s *AuthService) ExchangeCode(ctx context.Context, code string) (string, *m
 		return "", nil, fmt.Errorf("failed to decode userinfo: %w", err)
 	}
 
+	sub := strings.TrimSpace(userInfo.Sub)
+	if sub == "" {
+		return "", nil, fmt.Errorf("userinfo missing stable subject (sub)")
+	}
+
 	// Determine role from groups
 	role := "user"
 	for _, g := range userInfo.Groups {
@@ -123,21 +128,31 @@ func (s *AuthService) ExchangeCode(ctx context.Context, code string) (string, *m
 		}
 	}
 
-	// Upsert user into database
+	username := strings.TrimSpace(userInfo.PreferredUsername)
+	if username == "" {
+		// Fallback: never bind solely on mutable empty names.
+		username = "user-" + sub
+		if len(username) > 64 {
+			username = username[:64]
+		}
+	}
+
+	// Upsert by OIDC sub (stable), not mutable preferred_username alone.
 	user := &model.User{
-		Username:     userInfo.PreferredUsername,
+		Username:     username,
 		DisplayName:  userInfo.Name,
 		Email:        userInfo.Email,
 		Role:         role,
+		OIDCSub:      sub,
 		StorageQuota: s.cfg.DefaultQuotaBytes,
 	}
 
-	if err := s.userRepo.Upsert(ctx, user); err != nil {
+	if err := s.userRepo.UpsertByOIDC(ctx, user); err != nil {
 		return "", nil, fmt.Errorf("failed to upsert user: %w", err)
 	}
 
-	// Re-fetch to get full user data (including existing quota if not new)
-	user, err = s.userRepo.FindByUsername(ctx, userInfo.PreferredUsername)
+	// Re-fetch full row (quota, storage_used) by stable subject.
+	user, err = s.userRepo.FindByOIDCSub(ctx, sub)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to fetch user: %w", err)
 	}

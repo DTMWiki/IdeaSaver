@@ -55,32 +55,64 @@ func (r *UploadTaskRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 func (r *UploadTaskRepository) UpdateChunkProgress(ctx context.Context, id uuid.UUID, uploadedChunks int, uploadedSize int64) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE upload_tasks SET uploaded_chunks = $2, uploaded_size = $3, status = 'uploading', updated_at = NOW()
-		 WHERE id = $1`, id, uploadedChunks, uploadedSize)
+		 WHERE id = $1 AND status NOT IN ('completed', 'failed')`, id, uploadedChunks, uploadedSize)
 	return err
 }
 
-func (r *UploadTaskRepository) UpdateMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string, uploadedChunks int, uploadedSize int64) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE upload_tasks
-		 SET uploaded_chunks = $2,
-		     uploaded_size = $3,
-		     status = 'uploading',
-		     part_etags = jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$4], to_jsonb($5::text), true),
-		     updated_at = NOW()
-		 WHERE id = $1`,
-		id,
-		uploadedChunks,
-		uploadedSize,
-		strconv.Itoa(int(partNumber)),
-		etag,
+// RecordMultipartPart stores a part etag atomically and recomputes progress from etag keys
+// so concurrent chunk uploads cannot clobber each other via read-modify-write races.
+func (r *UploadTaskRepository) RecordMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string) error {
+	partKey := strconv.Itoa(int(partNumber))
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE upload_tasks
+		SET part_etags = jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true),
+		    uploaded_chunks = (
+		      SELECT COUNT(*)::int
+		      FROM jsonb_object_keys(
+		        jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true)
+		      )
+		    ),
+		    uploaded_size = LEAST(
+		      total_size,
+		      (
+		        SELECT COUNT(*)::bigint
+		        FROM jsonb_object_keys(
+		          jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true)
+		        )
+		      ) * chunk_size
+		    ),
+		    status = 'uploading',
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND status NOT IN ('completed', 'failed')`,
+		id, partKey, etag,
 	)
 	return err
+}
+
+// UpdateMultipartPart is kept for older call sites; prefers RecordMultipartPart.
+func (r *UploadTaskRepository) UpdateMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string, uploadedChunks int, uploadedSize int64) error {
+	_ = uploadedChunks
+	_ = uploadedSize
+	return r.RecordMultipartPart(ctx, id, partNumber, etag)
 }
 
 func (r *UploadTaskRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE upload_tasks SET status = $2, updated_at = NOW() WHERE id = $1`, id, status)
 	return err
+}
+
+// ClaimCompleting transitions a task into the completing state so only one worker finalizes it.
+func (r *UploadTaskRepository) ClaimCompleting(ctx context.Context, id uuid.UUID) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_tasks SET status = 'completing', updated_at = NOW()
+		 WHERE id = $1 AND status IN ('pending', 'uploading')`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (r *UploadTaskRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.UploadTask, error) {

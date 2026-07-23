@@ -79,7 +79,10 @@ func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID
 	if file.ThumbnailKey != "" {
 		_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
 	}
-	_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+	// Soft-delete already released quota; only free active files.
+	if file.DeletedAt == nil && !file.IsDirectory && file.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+	}
 
 	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
 		return err
@@ -127,9 +130,31 @@ func (s *AdminService) DeleteVideo(ctx context.Context, videoID, adminID uuid.UU
 	return nil
 }
 
-// CleanupTrash manually cleans up expired trash.
+// CleanupTrash manually cleans up expired trash (DB rows + OSS objects).
 func (s *AdminService) CleanupTrash(ctx context.Context) (int64, error) {
-	return s.repos.Files.CleanupTrash(ctx, s.cfg.TrashRetentionDays)
+	// Delegate to FileService path when available via shared repos/OSS:
+	// list expired, delete objects, then rows — without double-billing quota.
+	files, err := s.repos.Files.ListExpiredTrash(ctx, s.cfg.TrashRetentionDays)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for i := range files {
+		f := files[i]
+		if s.oss != nil {
+			if f.StorageKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.StorageKey)
+			}
+			if f.ThumbnailKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
+			}
+		}
+		if err := s.repos.Files.PermanentDelete(ctx, f.ID); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
 }
 
 // GetUserHistory returns a user's operation history.
@@ -248,7 +273,9 @@ func (s *AdminService) ReviewAppeal(ctx context.Context, appealID, adminID uuid.
 		if file.ThumbnailKey != "" {
 			_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
 		}
-		_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+		if file.DeletedAt == nil && !file.IsDirectory && file.Size > 0 {
+			_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
+		}
 		if err := s.repos.Files.PermanentDelete(ctx, file.ID); err != nil {
 			return err
 		}

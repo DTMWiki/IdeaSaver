@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -55,6 +56,10 @@ type Config struct {
 
 	// Trash cleanup
 	TrashRetentionDays int
+
+	// TrustedProxies are CIDRs/IPs Gin may trust for X-Forwarded-For / ClientIP.
+	// Empty means do not trust forwarded headers (safe default).
+	TrustedProxies []string
 }
 
 // Load reads configuration from environment variables and .env file.
@@ -95,6 +100,7 @@ func Load() (*Config, error) {
 		UploadRateLimitMBps:  getEnvFloat("IDEASAVER_UPLOAD_RATE_LIMIT_MBPS", 0),       // 0 = unlimited
 		DefaultQuotaBytes:    getEnvInt64("IDEASAVER_DEFAULT_QUOTA_BYTES", 5368709120), // 5GB
 		TrashRetentionDays:   getEnvIntClamped("IDEASAVER_TRASH_RETENTION_DAYS", 30, 1, 3650),
+		TrustedProxies:       getEnvCSV("IDEASAVER_TRUSTED_PROXIES"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -154,4 +160,23 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 		}
 	}
 	return defaultVal
+}
+
+// getEnvCSV splits a comma/space separated env list (e.g. trusted proxy CIDRs).
+func getEnvCSV(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

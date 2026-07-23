@@ -69,6 +69,14 @@ func main() {
 
 	r := gin.Default()
 
+	// Never trust all proxies by default (ClientIP / rate-limit spoofing).
+	// Set IDEASAVER_TRUSTED_PROXIES to your reverse-proxy CIDRs when behind nginx/CDN.
+	if len(cfg.TrustedProxies) == 0 {
+		_ = r.SetTrustedProxies(nil)
+	} else if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		log.Fatalf("Invalid IDEASAVER_TRUSTED_PROXIES: %v", err)
+	}
+
 	// Global middleware
 	r.Use(middleware.CORS(cfg))
 	r.Use(middleware.RateLimit(cfg))

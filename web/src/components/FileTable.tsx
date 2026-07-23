@@ -219,7 +219,11 @@ export default function FileTable({
         }}
         onRow={(record) => ({
           onClick: () => handleRowClick(record),
-          onContextMenu: (e) => onContextMenu(e, record),
+          onContextMenu: (e) => {
+            // Prevent bubbling to dashboard background "empty area" context menu.
+            e.stopPropagation()
+            onContextMenu(e, record)
+          },
           className: "file-table-row",
         })}
       />

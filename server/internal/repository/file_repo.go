@@ -128,6 +128,7 @@ func (r *FileRepository) ListTrash(ctx context.Context, userID uuid.UUID) ([]mod
 }
 
 func (r *FileRepository) CleanupTrash(ctx context.Context, retentionDays int) (int64, error) {
+	// Prefer FileService.CleanupTrash which also removes OSS objects.
 	result, err := r.db.ExecContext(ctx,
 		`DELETE FROM files WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '1 day' * $1`,
 		retentionDays)
@@ -135,6 +136,37 @@ func (r *FileRepository) CleanupTrash(ctx context.Context, retentionDays int) (i
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// ListExpiredTrash returns soft-deleted files past retention for cleanup (OSS + DB).
+func (r *FileRepository) ListExpiredTrash(ctx context.Context, retentionDays int) ([]model.File, error) {
+	if retentionDays < 1 {
+		retentionDays = 1
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
+		        public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
+		        deleted_at, created_at, updated_at
+		 FROM files
+		 WHERE deleted_at IS NOT NULL
+		   AND deleted_at < NOW() - INTERVAL '1 day' * $1
+		 ORDER BY deleted_at ASC
+		 LIMIT 500`,
+		retentionDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []model.File
+	for rows.Next() {
+		f, err := scanFile(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, *f)
+	}
+	return files, nil
 }
 
 // ListAll returns all files across all users (for admin).

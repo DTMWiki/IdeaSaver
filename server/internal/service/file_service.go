@@ -189,6 +189,8 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 }
 
 // SoftDelete moves a file to trash (soft delete).
+// Quota is released immediately so soft-deleted objects match Recalc semantics
+// (storage_used only counts deleted_at IS NULL files).
 func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -197,8 +199,14 @@ func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID u
 	if file.UserID != userID {
 		return ErrPermission
 	}
+	if file.DeletedAt != nil {
+		return nil
+	}
 	if err := s.repos.Files.SoftDelete(ctx, fileID); err != nil {
 		return err
+	}
+	if !file.IsDirectory && file.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
 	}
 	s.logAction(ctx, userID, "delete", "file", &fileID, map[string]any{
 		"name": file.Name,
@@ -215,8 +223,23 @@ func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid
 	if file.UserID != userID {
 		return ErrPermission
 	}
+	if file.DeletedAt == nil {
+		return nil
+	}
+	if !file.IsDirectory && file.Size > 0 {
+		user, uerr := s.repos.Users.FindByID(ctx, userID)
+		if uerr != nil {
+			return uerr
+		}
+		if user.StorageUsed+file.Size > user.StorageQuota {
+			return fmt.Errorf("存储配额不足，无法从回收站恢复")
+		}
+	}
 	if err := s.repos.Files.Restore(ctx, fileID); err != nil {
 		return err
+	}
+	if !file.IsDirectory && file.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, file.Size)
 	}
 	s.logAction(ctx, userID, "restore", "file", &fileID, map[string]any{
 		"name": file.Name,
@@ -235,15 +258,19 @@ func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, use
 	}
 
 	// Delete from OSS
-	if file.StorageKey != "" {
-		_ = s.oss.DeleteObject(ctx, file.StorageKey)
-	}
-	if file.ThumbnailKey != "" {
-		_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
+	if s.oss != nil {
+		if file.StorageKey != "" {
+			_ = s.oss.DeleteObject(ctx, file.StorageKey)
+		}
+		if file.ThumbnailKey != "" {
+			_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
+		}
 	}
 
-	// Update storage used
-	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
+	// Quota was already released on soft-delete; only free again if still active.
+	if file.DeletedAt == nil && !file.IsDirectory && file.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
+	}
 	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
 		return err
 	}
@@ -259,9 +286,30 @@ func (s *FileService) ListTrash(ctx context.Context, userID uuid.UUID) ([]model.
 	return s.repos.Files.ListTrash(ctx, userID)
 }
 
-// CleanupTrash removes files that have been in trash for too long.
+// CleanupTrash removes files that have been in trash for too long (DB + OSS).
+// Quota is not adjusted: soft-delete already released storage.
 func (s *FileService) CleanupTrash(ctx context.Context) (int64, error) {
-	return s.repos.Files.CleanupTrash(ctx, s.cfg.TrashRetentionDays)
+	files, err := s.repos.Files.ListExpiredTrash(ctx, s.cfg.TrashRetentionDays)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for i := range files {
+		f := files[i]
+		if s.oss != nil {
+			if f.StorageKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.StorageKey)
+			}
+			if f.ThumbnailKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
+			}
+		}
+		if err := s.repos.Files.PermanentDelete(ctx, f.ID); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
 }
 
 // GetFileURL returns the direct link URL and markdown reference for a file.

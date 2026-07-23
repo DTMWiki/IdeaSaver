@@ -13,6 +13,8 @@ type User struct {
 	DisplayName  string    `json:"display_name" db:"display_name"`
 	Email        string    `json:"email" db:"email"`
 	Role         string    `json:"role" db:"role"` // "user" | "admin"
+	// OIDCSub is the stable IdP subject; preferred for login binding over mutable username.
+	OIDCSub      string    `json:"-" db:"oidc_sub"`
 	StorageQuota int64     `json:"storage_quota" db:"storage_quota"`
 	StorageUsed  int64     `json:"storage_used" db:"storage_used"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`

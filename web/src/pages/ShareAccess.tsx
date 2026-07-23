@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, Input, Button, Typography, Space, Spin, Result, Image, App } from 'antd'
 import { LockOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
@@ -14,6 +14,7 @@ export default function ShareAccess() {
     const { message } = App.useApp()
     const [file, setFile] = useState<ShareFileView | null>(null)
     const [downloadToken, setDownloadToken] = useState<string | null>(null)
+    const [tokenExpiresAt, setTokenExpiresAt] = useState<number | null>(null)
     const [loading, setLoading] = useState(false)
     const [needPassword, setNeedPassword] = useState(false)
     const [password, setPassword] = useState('')
@@ -21,17 +22,30 @@ export default function ShareAccess() {
     const [unlockedPassword, setUnlockedPassword] = useState<string | undefined>()
     const [error, setError] = useState<string | null>(null)
     const [previewURL, setPreviewURL] = useState<string | null>(null)
+    const refreshTimerRef = useRef<number | null>(null)
 
-    const fetchShare = useCallback(async (pwd?: string) => {
+    const applyAccessResult = useCallback((
+        data: { file: ShareFileView; download_token: string; token_expires_in: number },
+        pwd?: string,
+    ) => {
+        setFile(data.file)
+        setDownloadToken(data.download_token)
+        const ttl = Math.max(30, Number(data.token_expires_in) || 900)
+        // Refresh a bit before expiry so download/preview keep working on long pages.
+        setTokenExpiresAt(Date.now() + ttl * 1000)
+        setUnlockedPassword(pwd)
+        setNeedPassword(false)
+    }, [])
+
+    const fetchShare = useCallback(async (pwd?: string, opts?: { silent?: boolean }) => {
         if (!code) return
-        setLoading(true)
-        setError(null)
+        if (!opts?.silent) {
+            setLoading(true)
+            setError(null)
+        }
         try {
             const data = await accessShare(code, pwd)
-            setFile(data.file)
-            setDownloadToken(data.download_token)
-            setUnlockedPassword(pwd || undefined)
-            setNeedPassword(false)
+            applyAccessResult(data, pwd)
         } catch (err: unknown) {
             const response = (err as {
                 response?: { data?: { error?: string; code?: string } }
@@ -42,21 +56,47 @@ export default function ShareAccess() {
                 setNeedPassword(true)
                 setFile(null)
                 setDownloadToken(null)
+                setTokenExpiresAt(null)
                 if (codeKey === 'password_invalid' || msg.includes('密码错误')) {
                     setError('密码错误，请重试')
-                } else {
+                } else if (!opts?.silent) {
                     setError(null)
                 }
-            } else {
+            } else if (!opts?.silent) {
                 setError(msg)
                 setNeedPassword(false)
             }
         } finally {
-            setLoading(false)
+            if (!opts?.silent) setLoading(false)
         }
-    }, [code])
+    }, [applyAccessResult, code])
 
-    useEffect(() => { void fetchShare() }, [fetchShare])
+    useEffect(() => {
+        // Defer so React 19 set-state-in-effect lint stays happy for mount fetches.
+        const t = window.setTimeout(() => { void fetchShare() }, 0)
+        return () => window.clearTimeout(t)
+    }, [fetchShare])
+
+    // Proactively refresh short-lived download token before expiry.
+    useEffect(() => {
+        if (refreshTimerRef.current) {
+            window.clearTimeout(refreshTimerRef.current)
+            refreshTimerRef.current = null
+        }
+        if (!tokenExpiresAt || !file) return
+
+        const ms = Math.max(5_000, tokenExpiresAt - Date.now() - 60_000)
+        refreshTimerRef.current = window.setTimeout(() => {
+            void fetchShare(unlockedPassword, { silent: true })
+        }, ms)
+
+        return () => {
+            if (refreshTimerRef.current) {
+                window.clearTimeout(refreshTimerRef.current)
+                refreshTimerRef.current = null
+            }
+        }
+    }, [tokenExpiresAt, file, unlockedPassword, fetchShare])
 
     // Image preview via short-lived token (streamed; no password in URL).
     useEffect(() => {
@@ -82,12 +122,12 @@ export default function ShareAccess() {
             return
         }
         let token = downloadToken
-        if (!token) {
+        const nearExpiry = tokenExpiresAt != null && tokenExpiresAt - Date.now() < 30_000
+        if (!token || nearExpiry) {
             try {
                 const data = await accessShare(code, unlockedPassword)
+                applyAccessResult(data, unlockedPassword)
                 token = data.download_token
-                setDownloadToken(token)
-                setFile(data.file)
             } catch {
                 message.error('下载凭证已失效，请重新打开分享')
                 return
