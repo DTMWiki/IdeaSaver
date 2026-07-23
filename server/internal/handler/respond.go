@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/service"
 	"github.com/gin-gonic/gin"
@@ -21,28 +22,40 @@ func writeServiceError(c *gin.Context, err error) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "没有权限"})
 	case errors.Is(err, service.ErrNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "资源不存在"})
-	case isClientFacingError(err):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
+		var ce *service.ClientError
+		if errors.As(err, &ce) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": ce.Msg})
+			return
+		}
+		if isSafeBusinessMessage(err.Error()) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		log.Printf("request error path=%s err=%v", c.FullPath(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "操作失败，请稍后重试"})
 	}
 }
 
-func isClientFacingError(err error) bool {
-	msg := err.Error()
-	// Chinese business messages or short known English phrases are safe for clients.
-	if strings.Contains(msg, "存储配额") ||
-		strings.Contains(msg, "超过最大") ||
-		strings.Contains(msg, "上传") ||
-		strings.Contains(msg, "封禁") ||
-		strings.Contains(msg, "申诉") ||
-		strings.Contains(msg, "名称不能") ||
-		strings.Contains(msg, "无效") ||
-		strings.Contains(msg, "任务") ||
-		strings.Contains(msg, "密码") ||
-		strings.Contains(msg, "分享") {
-		return true
+// isSafeBusinessMessage allows short Chinese product messages through, but blocks
+// English/stack-like internals (avoids substring false positives like "分享" in stack traces).
+func isSafeBusinessMessage(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" || len(msg) > 160 {
+		return false
 	}
-	return false
+	lower := strings.ToLower(msg)
+	for _, bad := range []string{"failed to", "sql:", "panic", "stack", "runtime.", "pq:", "http:", "json:"} {
+		if strings.Contains(lower, bad) {
+			return false
+		}
+	}
+	hasCJK := false
+	for _, r := range msg {
+		if unicode.Is(unicode.Han, r) {
+			hasCJK = true
+			break
+		}
+	}
+	return hasCJK
 }

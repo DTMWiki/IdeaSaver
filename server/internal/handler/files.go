@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -150,10 +151,20 @@ func handleBatchDelete(svc *service.Services) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
 			return
 		}
+		var failed []string
+		var deleted int
 		for _, id := range req.IDs {
-			_ = svc.File.SoftDelete(c.Request.Context(), id, user.ID)
+			if err := svc.File.SoftDelete(c.Request.Context(), id, user.ID); err != nil {
+				failed = append(failed, id.String())
+				continue
+			}
+			deleted++
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      len(failed) == 0,
+			"deleted": deleted,
+			"failed":  failed,
+		})
 	}
 }
 
@@ -241,7 +252,14 @@ func handlePreview(svc *service.Services) gin.HandlerFunc {
 		}
 		defer reader.Close()
 
-		c.Header("Content-Type", contentType)
+		serveType := safeServeContentType(contentType, file.Name)
+		c.Header("Content-Type", serveType)
+		c.Header("X-Content-Type-Options", "nosniff")
+		if forceAttachment(contentType, file.Name) {
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.Name))
+		} else if !thumbMode {
+			c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", file.Name))
+		}
 		if contentLength > 0 {
 			c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
 		}

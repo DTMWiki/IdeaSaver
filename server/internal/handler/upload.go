@@ -37,7 +37,11 @@ func handleUploadChunk(svc *service.Services) gin.HandlerFunc {
 			return
 		}
 
-		chunkIndex, _ := strconv.Atoi(c.PostForm("chunk_index"))
+		chunkIndex, err := strconv.Atoi(c.PostForm("chunk_index"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的分片索引"})
+			return
+		}
 		file, header, err := c.Request.FormFile("chunk")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少分片数据"})

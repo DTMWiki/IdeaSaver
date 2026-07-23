@@ -62,6 +62,10 @@ export function loadDogePlayerScript() {
         const script = document.createElement('script')
         script.type = 'text/javascript'
         script.src = DOGE_PLAYER_SCRIPT
+        // crossOrigin enables better isolation; SRI hash is not pinned because Doge CDN
+        // loader is not versioned (hash would break on their deploy). CSP script-src restricts host.
+        script.crossOrigin = 'anonymous'
+        script.referrerPolicy = 'no-referrer'
         script.setAttribute('data-doge-player-sdk', 'true')
         script.onload = () => {
             waitForDogePlayer().then(resolve).catch(reject)

@@ -60,6 +60,10 @@ func (rl *ipRateLimiter) cleanupLoop() {
 				delete(rl.visitors, k)
 			}
 		}
+		// Hard cap to bound memory under IP-flood.
+		if len(rl.visitors) > 100_000 {
+			rl.visitors = make(map[string]*visitor)
+		}
 		rl.mu.Unlock()
 	}
 }

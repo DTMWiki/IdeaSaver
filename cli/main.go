@@ -137,6 +137,14 @@ func handleConfig() {
 		}
 		key := os.Args[3]
 		value := os.Args[4]
+		if strings.ContainsAny(value, "\r\n") {
+			fmt.Fprintln(os.Stderr, "VALUE must not contain newlines")
+			os.Exit(1)
+		}
+		if strings.ContainsAny(key, "=\r\n") {
+			fmt.Fprintln(os.Stderr, "KEY is invalid")
+			os.Exit(1)
+		}
 
 		data, err := os.ReadFile(envFile)
 		if err != nil {

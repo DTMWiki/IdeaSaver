@@ -21,6 +21,8 @@ type SSEClient struct {
 	Events chan SSEEvent
 }
 
+const maxSSEConnectionsPerUser = 5
+
 // SSEService manages SSE connections and event broadcasting.
 type SSEService struct {
 	mu      sync.RWMutex
@@ -33,11 +35,24 @@ func NewSSEService() *SSEService {
 	}
 }
 
-// Register adds a new SSE client.
-func (s *SSEService) Register(client *SSEClient) {
+// Register adds a new SSE client. Returns false if the user already has too many connections.
+func (s *SSEService) Register(client *SSEClient) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if client == nil {
+		return false
+	}
+	count := 0
+	for _, c := range s.clients {
+		if c.UserID == client.UserID {
+			count++
+		}
+	}
+	if count >= maxSSEConnectionsPerUser {
+		return false
+	}
 	s.clients[client.ID] = client
+	return true
 }
 
 // Unregister removes an SSE client.

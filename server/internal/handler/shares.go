@@ -80,18 +80,23 @@ func handleDownloadShare(svc *service.Services) gin.HandlerFunc {
 		}
 		defer reader.Close()
 
-		if contentType != "" {
-			c.Header("Content-Type", contentType)
+		name := ""
+		if view != nil {
+			name = view.Name
 		}
+		serveType := safeServeContentType(contentType, name)
+		c.Header("Content-Type", serveType)
+		c.Header("X-Content-Type-Options", "nosniff")
 		if contentLength > 0 {
 			c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
 		}
+		// Inline preview only for safe types (images etc.); never HTML/SVG/JS.
 		disposition := "attachment"
-		if c.Query("inline") == "1" {
+		if c.Query("inline") == "1" && !forceAttachment(contentType, name) && serveType != "application/octet-stream" {
 			disposition = "inline"
 		}
-		if view != nil && view.Name != "" {
-			c.Header("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, view.Name))
+		if name != "" {
+			c.Header("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, name))
 		} else {
 			c.Header("Content-Disposition", disposition)
 		}
@@ -103,8 +108,10 @@ func handleDownloadShare(svc *service.Services) gin.HandlerFunc {
 func writeShareAccessError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrSharePasswordRequired):
+		middleware.MarkShareAuthFailed(c)
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要密码", "code": "password_required"})
 	case errors.Is(err, service.ErrSharePasswordInvalid):
+		middleware.MarkShareAuthFailed(c)
 		c.JSON(http.StatusForbidden, gin.H{"error": "密码错误", "code": "password_invalid"})
 	case errors.Is(err, service.ErrShareExpired):
 		c.JSON(http.StatusForbidden, gin.H{"error": "分享链接已过期", "code": "share_expired"})

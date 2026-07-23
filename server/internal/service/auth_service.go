@@ -183,12 +183,18 @@ func (s *AuthService) generateJWT(user *model.User) (string, error) {
 		"user_id":  user.ID.String(),
 		"username": user.Username,
 		"role":     user.Role,
+		"tv":       user.TokenVersion,
 		"exp":      time.Now().Add(24 * time.Hour).Unix(),
 		"iat":      time.Now().Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(s.cfg.JWTSecret))
+}
+
+// InvalidateSessions bumps the user's token version so existing JWTs stop working.
+func (s *AuthService) InvalidateSessions(ctx context.Context, userID uuid.UUID) error {
+	return s.userRepo.BumpTokenVersion(ctx, userID)
 }
 
 // GetUser retrieves a user by ID.
