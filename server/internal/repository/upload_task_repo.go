@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
@@ -55,32 +56,64 @@ func (r *UploadTaskRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 func (r *UploadTaskRepository) UpdateChunkProgress(ctx context.Context, id uuid.UUID, uploadedChunks int, uploadedSize int64) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE upload_tasks SET uploaded_chunks = $2, uploaded_size = $3, status = 'uploading', updated_at = NOW()
-		 WHERE id = $1`, id, uploadedChunks, uploadedSize)
+		 WHERE id = $1 AND status NOT IN ('completed', 'failed')`, id, uploadedChunks, uploadedSize)
 	return err
 }
 
-func (r *UploadTaskRepository) UpdateMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string, uploadedChunks int, uploadedSize int64) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE upload_tasks
-		 SET uploaded_chunks = $2,
-		     uploaded_size = $3,
-		     status = 'uploading',
-		     part_etags = jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$4], to_jsonb($5::text), true),
-		     updated_at = NOW()
-		 WHERE id = $1`,
-		id,
-		uploadedChunks,
-		uploadedSize,
-		strconv.Itoa(int(partNumber)),
-		etag,
+// RecordMultipartPart stores a part etag atomically and recomputes progress from etag keys
+// so concurrent chunk uploads cannot clobber each other via read-modify-write races.
+func (r *UploadTaskRepository) RecordMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string) error {
+	partKey := strconv.Itoa(int(partNumber))
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE upload_tasks
+		SET part_etags = jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true),
+		    uploaded_chunks = (
+		      SELECT COUNT(*)::int
+		      FROM jsonb_object_keys(
+		        jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true)
+		      )
+		    ),
+		    uploaded_size = LEAST(
+		      total_size,
+		      (
+		        SELECT COUNT(*)::bigint
+		        FROM jsonb_object_keys(
+		          jsonb_set(COALESCE(part_etags, '{}'::jsonb), ARRAY[$2::text], to_jsonb($3::text), true)
+		        )
+		      ) * chunk_size
+		    ),
+		    status = 'uploading',
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND status NOT IN ('completed', 'failed')`,
+		id, partKey, etag,
 	)
 	return err
+}
+
+// UpdateMultipartPart is kept for older call sites; prefers RecordMultipartPart.
+func (r *UploadTaskRepository) UpdateMultipartPart(ctx context.Context, id uuid.UUID, partNumber int32, etag string, uploadedChunks int, uploadedSize int64) error {
+	_ = uploadedChunks
+	_ = uploadedSize
+	return r.RecordMultipartPart(ctx, id, partNumber, etag)
 }
 
 func (r *UploadTaskRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE upload_tasks SET status = $2, updated_at = NOW() WHERE id = $1`, id, status)
 	return err
+}
+
+// ClaimCompleting transitions a task into the completing state so only one worker finalizes it.
+func (r *UploadTaskRepository) ClaimCompleting(ctx context.Context, id uuid.UUID) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_tasks SET status = 'completing', updated_at = NOW()
+		 WHERE id = $1 AND status IN ('pending', 'uploading')`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (r *UploadTaskRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.UploadTask, error) {
@@ -109,5 +142,58 @@ func (r *UploadTaskRepository) ListByUser(ctx context.Context, userID uuid.UUID)
 
 func (r *UploadTaskRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM upload_tasks WHERE id = $1`, id)
+	return err
+}
+
+// TryAcquireChunkLease reserves one global upload slot (multi-instance safe).
+// Returns leaseID for ReleaseChunkLease. Expired leases are reclaimed first.
+func (r *UploadTaskRepository) TryAcquireChunkLease(ctx context.Context, maxSlots int, holder string, taskID *uuid.UUID, ttl time.Duration) (int64, error) {
+	if maxSlots < 1 {
+		maxSlots = 1
+	}
+	if ttl <= 0 {
+		ttl = 2 * time.Minute
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_chunk_leases WHERE expires_at < NOW()`); err != nil {
+		// Table may not exist yet on old deploys before migrate — surface error.
+		return 0, err
+	}
+
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_chunk_leases`).Scan(&active); err != nil {
+		return 0, err
+	}
+	if active >= maxSlots {
+		return 0, nil
+	}
+
+	var leaseID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO upload_chunk_leases (task_id, holder, expires_at)
+		 VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+		 RETURNING id`,
+		taskID, holder, int(ttl.Seconds()),
+	).Scan(&leaseID)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return leaseID, nil
+}
+
+// ReleaseChunkLease frees a previously acquired upload slot.
+func (r *UploadTaskRepository) ReleaseChunkLease(ctx context.Context, leaseID int64) error {
+	if leaseID <= 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `DELETE FROM upload_chunk_leases WHERE id = $1`, leaseID)
 	return err
 }

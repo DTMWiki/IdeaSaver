@@ -51,7 +51,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const msg =
                 (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
                 '登录失败'
-            throw new Error(msg)
+            throw new Error(msg, { cause: err })
         }
     },
 

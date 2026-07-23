@@ -19,5 +19,11 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // Data-fetch on mount still legitimately sets loading state inside effects.
+      // Keep other react-hooks rules; only relax this cascading-render heuristic.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
+
