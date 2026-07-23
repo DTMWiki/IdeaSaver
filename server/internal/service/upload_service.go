@@ -230,9 +230,15 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	if task.Status == "failed" {
 		return nil, fmt.Errorf("上传任务已失败，请重新上传")
 	}
+	if task.Status == "paused" {
+		return nil, fmt.Errorf("上传已暂停，请先恢复后再完成")
+	}
 	if task.Status == "completing" {
 		// Another request is finalizing; surface a soft conflict.
 		return nil, fmt.Errorf("上传正在完成，请稍后重试")
+	}
+	if err := s.assertOwnedDirectory(ctx, userID, parentID); err != nil {
+		return nil, err
 	}
 
 	// Claim exclusive finalize to prevent double file/quota races.
@@ -252,6 +258,9 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 				return nil, fmt.Errorf("上传已完成，但文件记录不存在")
 			}
 			return file, nil
+		}
+		if task.Status == "paused" {
+			return nil, fmt.Errorf("上传已暂停，请先恢复后再完成")
 		}
 		return nil, fmt.Errorf("上传正在完成，请稍后重试")
 	}
@@ -285,9 +294,29 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 		return nil, fmt.Errorf("上传内容不完整")
 	}
 
+	// Prefer actual object size from OSS when available.
+	finalSize := task.TotalSize
+	if s.oss != nil && task.StorageKey != "" {
+		if headSize, headErr := s.oss.HeadObjectSize(ctx, task.StorageKey); headErr == nil && headSize > 0 {
+			finalSize = headSize
+		}
+	}
+
+	// Re-check quota at finalize (parallel inits can over-subscribe).
+	user, err := s.repos.Users.FindByID(ctx, userID)
+	if err != nil {
+		_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
+		return nil, err
+	}
+	if user.StorageUsed+finalSize > user.StorageQuota {
+		_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
+		return nil, fmt.Errorf("存储配额不足，上传无法完成")
+	}
+
 	// Create file record
 	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parentID, task.Filename, nil)
 	if err != nil {
+		_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "failed")
 		return nil, err
 	}
 	ext := strings.ToLower(filepath.Ext(task.Filename))
@@ -300,7 +329,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 		Name:             name,
 		StorageKey:       task.StorageKey,
 		MimeType:         mimeType,
-		Size:             task.TotalSize,
+		Size:             finalSize,
 		PublicURL:        publicURL,
 		ModerationStatus: "normal",
 	}
@@ -323,7 +352,7 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	})
 
 	// Update storage used
-	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, task.TotalSize)
+	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, finalSize)
 	_ = s.repos.UploadTasks.UpdateStatus(ctx, taskID, "completed")
 
 	// Push SSE event
@@ -338,6 +367,26 @@ func (s *UploadService) CompleteUpload(ctx context.Context, taskID uuid.UUID, us
 	})
 
 	return file, nil
+}
+
+func (s *UploadService) assertOwnedDirectory(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) error {
+	if parentID == nil {
+		return nil
+	}
+	parent, err := s.repos.Files.FindByID(ctx, *parentID)
+	if err != nil {
+		return fmt.Errorf("目标文件夹不存在")
+	}
+	if parent.UserID != userID {
+		return ErrPermission
+	}
+	if parent.DeletedAt != nil {
+		return fmt.Errorf("目标文件夹已在回收站中")
+	}
+	if !parent.IsDirectory {
+		return fmt.Errorf("目标必须是文件夹")
+	}
+	return nil
 }
 
 func (s *UploadService) createFileWithRetry(ctx context.Context, file *model.File) error {

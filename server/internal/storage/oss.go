@@ -479,6 +479,24 @@ func (c *OSSClient) GetObject(ctx context.Context, key string) (io.ReadCloser, s
 	return output.Body, contentType, contentLength, nil
 }
 
+// HeadObjectSize returns the Content-Length of an object without downloading it.
+func (c *OSSClient) HeadObjectSize(ctx context.Context, key string) (int64, error) {
+	if c == nil || c.client == nil {
+		return 0, fmt.Errorf("oss client unavailable")
+	}
+	out, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return 0, err
+	}
+	if out.ContentLength != nil {
+		return *out.ContentLength, nil
+	}
+	return 0, nil
+}
+
 func (c *OSSClient) GetStyledObject(ctx context.Context, key, style string) (io.ReadCloser, string, int64, error) {
 	style = strings.Trim(strings.TrimSpace(style), "/")
 	if style == "" {

@@ -22,14 +22,15 @@ type Services struct {
 // NewServices creates all service instances.
 func NewServices(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient, vcloud *storage.VCloudClient) *Services {
 	sseService := NewSSEService()
+	fileService := NewFileService(cfg, repos, oss)
 
 	return &Services{
 		Auth:      NewAuthService(cfg, repos.Users, repos.AuditLogs),
-		File:      NewFileService(cfg, repos, oss),
+		File:      fileService,
 		Video:     NewVideoService(cfg, repos, vcloud, sseService),
 		Upload:    NewUploadService(cfg, repos, oss, sseService),
 		Share:     NewShareService(cfg, repos, oss),
-		Admin:     NewAdminService(cfg, repos, oss),
+		Admin:     NewAdminService(cfg, repos, oss, vcloud, fileService),
 		SSE:       sseService,
 		AuditLogs: repos.AuditLogs,
 	}

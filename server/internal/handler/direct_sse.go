@@ -42,7 +42,8 @@ func handleDirectLink(svc *service.Services) gin.HandlerFunc {
 		if contentLength > 0 {
 			c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
 		}
-		c.Header("Cache-Control", "public, max-age=86400")
+		// Short private cache: banned/deleted resources must not stick in CDN for a day.
+		c.Header("Cache-Control", "private, max-age=300")
 		io.Copy(c.Writer, reader)
 	}
 }

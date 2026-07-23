@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
@@ -15,13 +16,15 @@ import (
 
 // AdminService handles admin-only business logic.
 type AdminService struct {
-	cfg   *config.Config
-	repos *repository.Repositories
-	oss   *storage.OSSClient
+	cfg    *config.Config
+	repos  *repository.Repositories
+	oss    *storage.OSSClient
+	vcloud *storage.VCloudClient
+	files  *FileService
 }
 
-func NewAdminService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient) *AdminService {
-	return &AdminService{cfg: cfg, repos: repos, oss: oss}
+func NewAdminService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient, vcloud *storage.VCloudClient, files *FileService) *AdminService {
+	return &AdminService{cfg: cfg, repos: repos, oss: oss, vcloud: vcloud, files: files}
 }
 
 // ListAllFiles returns all files across all users.
@@ -66,26 +69,21 @@ func (s *AdminService) RecalcAllStorageUsed(ctx context.Context, adminID uuid.UU
 	return n, nil
 }
 
-// DeleteFile permanently deletes any file (admin).
+// DeleteFile permanently deletes any file/folder tree (admin).
 func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
 		return err
 	}
 
-	if file.StorageKey != "" {
-		_ = s.oss.DeleteObject(ctx, file.StorageKey)
-	}
-	if file.ThumbnailKey != "" {
-		_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
-	}
-	// Soft-delete already released quota; only free active files.
-	if file.DeletedAt == nil && !file.IsDirectory && file.Size > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, file.UserID, -file.Size)
-	}
-
-	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
-		return err
+	if s.files != nil {
+		if err := s.files.permanentDeleteInternal(ctx, fileID, file.UserID); err != nil {
+			return err
+		}
+	} else {
+		if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
+			return err
+		}
 	}
 
 	_ = s.repos.AuditLogs.Create(ctx, &model.AuditLog{
@@ -101,11 +99,15 @@ func (s *AdminService) DeleteFile(ctx context.Context, fileID, adminID uuid.UUID
 	return nil
 }
 
-// DeleteVideo permanently deletes any video (admin).
+// DeleteVideo permanently deletes any video (admin), including DogeCloud VCloud asset.
 func (s *AdminService) DeleteVideo(ctx context.Context, videoID, adminID uuid.UUID) error {
 	video, err := s.repos.Videos.FindByID(ctx, videoID)
 	if err != nil {
 		return err
+	}
+
+	if s.vcloud != nil && video.VID != "" {
+		_ = s.vcloud.DeleteVideos([]string{video.VID})
 	}
 
 	if err := s.repos.Videos.Delete(ctx, videoID); err != nil {
@@ -132,29 +134,10 @@ func (s *AdminService) DeleteVideo(ctx context.Context, videoID, adminID uuid.UU
 
 // CleanupTrash manually cleans up expired trash (DB rows + OSS objects).
 func (s *AdminService) CleanupTrash(ctx context.Context) (int64, error) {
-	// Delegate to FileService path when available via shared repos/OSS:
-	// list expired, delete objects, then rows — without double-billing quota.
-	files, err := s.repos.Files.ListExpiredTrash(ctx, s.cfg.TrashRetentionDays)
-	if err != nil {
-		return 0, err
+	if s.files != nil {
+		return s.files.CleanupTrash(ctx)
 	}
-	var n int64
-	for i := range files {
-		f := files[i]
-		if s.oss != nil {
-			if f.StorageKey != "" {
-				_ = s.oss.DeleteObject(ctx, f.StorageKey)
-			}
-			if f.ThumbnailKey != "" {
-				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
-			}
-		}
-		if err := s.repos.Files.PermanentDelete(ctx, f.ID); err != nil {
-			continue
-		}
-		n++
-	}
-	return n, nil
+	return 0, fmt.Errorf("file service unavailable")
 }
 
 // GetUserHistory returns a user's operation history.

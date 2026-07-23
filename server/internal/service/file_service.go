@@ -70,6 +70,9 @@ func (s *FileService) ListFiles(ctx context.Context, userID uuid.UUID, parentID 
 
 // CreateDirectory creates a new directory.
 func (s *FileService) CreateDirectory(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID, name string) (*model.File, error) {
+	if err := s.assertOwnedDirectory(ctx, userID, parentID); err != nil {
+		return nil, err
+	}
 	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parentID, name, nil)
 	if err != nil {
 		return nil, err
@@ -123,6 +126,22 @@ func (s *FileService) Move(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	if file.UserID != userID {
 		return ErrPermission
 	}
+	if file.DeletedAt != nil {
+		return fmt.Errorf("已删除的文件请先从回收站恢复")
+	}
+	if err := s.assertOwnedDirectory(ctx, userID, newParentID); err != nil {
+		return err
+	}
+	// Prevent moving a folder into itself or a descendant (cycle).
+	if newParentID != nil {
+		isAnc, err := s.repos.Files.IsAncestor(ctx, fileID, *newParentID, userID)
+		if err != nil {
+			return err
+		}
+		if isAnc {
+			return fmt.Errorf("不能将文件夹移动到其自身或子目录中")
+		}
+	}
 	if err := s.repos.Files.Move(ctx, fileID, newParentID); err != nil {
 		return err
 	}
@@ -134,7 +153,7 @@ func (s *FileService) Move(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	return nil
 }
 
-// Copy copies a file (creates a new OSS object).
+// Copy copies a file (creates a new OSS object). Directories are not supported.
 func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UUID, destParentID *uuid.UUID) (*model.File, error) {
 	src, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -143,13 +162,42 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	if src.UserID != userID {
 		return nil, ErrPermission
 	}
+	if src.DeletedAt != nil {
+		return nil, fmt.Errorf("已删除的文件无法复制")
+	}
+	if src.IsDirectory {
+		return nil, fmt.Errorf("暂不支持复制文件夹，请逐个复制文件")
+	}
+	if err := s.assertOwnedDirectory(ctx, userID, destParentID); err != nil {
+		return nil, err
+	}
+
+	user, err := s.repos.Users.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if user.StorageUsed+src.Size > user.StorageQuota {
+		return nil, fmt.Errorf("存储配额不足，剩余 %d 字节", user.StorageQuota-user.StorageUsed)
+	}
 
 	newKey := generateStorageKey(userID.String(), src.Name)
 
 	// Copy the object in OSS
 	if src.StorageKey != "" {
+		if s.oss == nil {
+			return nil, fmt.Errorf("storage unavailable")
+		}
 		if err := s.oss.CopyObject(ctx, src.StorageKey, newKey); err != nil {
 			return nil, fmt.Errorf("failed to copy file in storage: %w", err)
+		}
+	}
+
+	// Copy thumbnail object if present (avoid sharing keys across files).
+	newThumb := ""
+	if src.ThumbnailKey != "" && s.oss != nil {
+		newThumb = generateStorageKey(userID.String(), "thumb-"+src.Name)
+		if err := s.oss.CopyObject(ctx, src.ThumbnailKey, newThumb); err != nil {
+			newThumb = "" // non-fatal
 		}
 	}
 
@@ -164,11 +212,11 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		ParentID:         destParentID,
 		Name:             name,
 		StorageKey:       newKey,
-		IsDirectory:      src.IsDirectory,
+		IsDirectory:      false,
 		MimeType:         src.MimeType,
 		Size:             src.Size,
 		PublicURL:        publicURL,
-		ThumbnailKey:     src.ThumbnailKey,
+		ThumbnailKey:     newThumb,
 		ModerationStatus: "normal",
 	}
 
@@ -176,7 +224,6 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		return nil, err
 	}
 
-	// Update storage used
 	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, src.Size)
 	s.logAction(ctx, userID, "copy", "file", &newFile.ID, map[string]any{
 		"source_file_id": src.ID.String(),
@@ -188,9 +235,8 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	return newFile, nil
 }
 
-// SoftDelete moves a file to trash (soft delete).
-// Quota is released immediately so soft-deleted objects match Recalc semantics
-// (storage_used only counts deleted_at IS NULL files).
+// SoftDelete moves a file or folder (recursive) to trash.
+// Quota is released for all non-directory files in the subtree.
 func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -202,19 +248,23 @@ func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID u
 	if file.DeletedAt != nil {
 		return nil
 	}
-	if err := s.repos.Files.SoftDelete(ctx, fileID); err != nil {
+
+	freed, err := s.repos.Files.SoftDeleteSubtree(ctx, fileID, userID)
+	if err != nil {
 		return err
 	}
-	if !file.IsDirectory && file.Size > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
+	if freed > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -freed)
 	}
 	s.logAction(ctx, userID, "delete", "file", &fileID, map[string]any{
-		"name": file.Name,
+		"name":         file.Name,
+		"is_directory": file.IsDirectory,
+		"freed_bytes":  freed,
 	})
 	return nil
 }
 
-// Restore restores a file from trash.
+// Restore restores a file or folder from trash (with unique rename if needed).
 func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -226,28 +276,57 @@ func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid
 	if file.DeletedAt == nil {
 		return nil
 	}
-	if !file.IsDirectory && file.Size > 0 {
+
+	needBytes, err := s.repos.Files.SumDeletedSubtreeSize(ctx, fileID, userID)
+	if err != nil {
+		return err
+	}
+	if needBytes > 0 {
 		user, uerr := s.repos.Users.FindByID(ctx, userID)
 		if uerr != nil {
 			return uerr
 		}
-		if user.StorageUsed+file.Size > user.StorageQuota {
+		if user.StorageUsed+needBytes > user.StorageQuota {
 			return fmt.Errorf("存储配额不足，无法从回收站恢复")
 		}
 	}
-	if err := s.repos.Files.Restore(ctx, fileID); err != nil {
+
+	// Resolve name conflicts in the parent before restoring.
+	uniqueName, err := ensureUniqueFileName(ctx, s.repos.Files, userID, file.ParentID, file.Name, &fileID)
+	if err != nil {
 		return err
 	}
-	if !file.IsDirectory && file.Size > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, file.Size)
+	if uniqueName != file.Name {
+		if err := s.repos.Files.Rename(ctx, fileID, uniqueName); err != nil {
+			return err
+		}
+	}
+
+	// Restore the whole subtree (children were soft-deleted with the folder).
+	subtree, err := s.repos.Files.ListDeletedSubtree(ctx, fileID, userID)
+	if err != nil {
+		return err
+	}
+	// Restore deepest first so parent FKs stay valid; actually restore any order is fine (only clear deleted_at).
+	for i := range subtree {
+		if subtree[i].DeletedAt != nil {
+			if err := s.repos.Files.Restore(ctx, subtree[i].ID); err != nil {
+				return err
+			}
+		}
+	}
+
+	if needBytes > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes)
 	}
 	s.logAction(ctx, userID, "restore", "file", &fileID, map[string]any{
-		"name": file.Name,
+		"name":         uniqueName,
+		"restored_bytes": needBytes,
 	})
 	return nil
 }
 
-// PermanentDelete permanently deletes a file and its OSS object.
+// PermanentDelete permanently deletes a file/folder tree and OSS objects.
 func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, userID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -257,26 +336,38 @@ func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, use
 		return ErrPermission
 	}
 
-	// Delete from OSS
-	if s.oss != nil {
-		if file.StorageKey != "" {
-			_ = s.oss.DeleteObject(ctx, file.StorageKey)
+	subtree, err := s.repos.Files.ListSubtree(ctx, fileID, userID)
+	if err != nil {
+		return err
+	}
+
+	var activeBytes int64
+	for i := range subtree {
+		f := subtree[i]
+		if f.DeletedAt == nil && !f.IsDirectory && f.Size > 0 {
+			activeBytes += f.Size
 		}
-		if file.ThumbnailKey != "" {
-			_ = s.oss.DeleteObject(ctx, file.ThumbnailKey)
+		if s.oss != nil {
+			if f.StorageKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.StorageKey)
+			}
+			if f.ThumbnailKey != "" {
+				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
+			}
 		}
 	}
 
-	// Quota was already released on soft-delete; only free again if still active.
-	if file.DeletedAt == nil && !file.IsDirectory && file.Size > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -file.Size)
-	}
-	if err := s.repos.Files.PermanentDelete(ctx, fileID); err != nil {
+	// Delete root (CASCADE removes descendants in DB).
+	if err := s.repos.Files.PermanentDeleteSubtree(ctx, fileID, userID); err != nil {
 		return err
 	}
+	if activeBytes > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -activeBytes)
+	}
 	s.logAction(ctx, userID, "permanent_delete", "file", &fileID, map[string]any{
-		"name":        file.Name,
-		"storage_key": file.StorageKey,
+		"name":         file.Name,
+		"nodes":        len(subtree),
+		"freed_bytes":  activeBytes,
 	})
 	return nil
 }
@@ -287,7 +378,7 @@ func (s *FileService) ListTrash(ctx context.Context, userID uuid.UUID) ([]model.
 }
 
 // CleanupTrash removes files that have been in trash for too long (DB + OSS).
-// Quota is not adjusted: soft-delete already released storage.
+// Quota is not adjusted for soft-deleted trees (already released).
 func (s *FileService) CleanupTrash(ctx context.Context) (int64, error) {
 	files, err := s.repos.Files.ListExpiredTrash(ctx, s.cfg.TrashRetentionDays)
 	if err != nil {
@@ -296,6 +387,36 @@ func (s *FileService) CleanupTrash(ctx context.Context) (int64, error) {
 	var n int64
 	for i := range files {
 		f := files[i]
+		// Skip children that will be cleaned with a parent still in trash list —
+		// ListExpiredTrash returns all expired rows; permanent-delete each root-like node safely.
+		if err := s.permanentDeleteInternal(ctx, f.ID, f.UserID); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// permanentDeleteInternal is PermanentDelete without ownership re-check by caller identity.
+func (s *FileService) permanentDeleteInternal(ctx context.Context, fileID, ownerID uuid.UUID) error {
+	file, err := s.repos.Files.FindByID(ctx, fileID)
+	if err != nil {
+		return err
+	}
+	// Already gone
+	if file == nil {
+		return nil
+	}
+	subtree, err := s.repos.Files.ListSubtree(ctx, fileID, ownerID)
+	if err != nil {
+		return err
+	}
+	var activeBytes int64
+	for i := range subtree {
+		f := subtree[i]
+		if f.DeletedAt == nil && !f.IsDirectory && f.Size > 0 {
+			activeBytes += f.Size
+		}
 		if s.oss != nil {
 			if f.StorageKey != "" {
 				_ = s.oss.DeleteObject(ctx, f.StorageKey)
@@ -304,12 +425,35 @@ func (s *FileService) CleanupTrash(ctx context.Context) (int64, error) {
 				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
 			}
 		}
-		if err := s.repos.Files.PermanentDelete(ctx, f.ID); err != nil {
-			continue
-		}
-		n++
 	}
-	return n, nil
+	if err := s.repos.Files.PermanentDeleteSubtree(ctx, fileID, ownerID); err != nil {
+		return err
+	}
+	if activeBytes > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, ownerID, -activeBytes)
+	}
+	return nil
+}
+
+// assertOwnedDirectory ensures parentID is nil (root) or an owned non-deleted directory.
+func (s *FileService) assertOwnedDirectory(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) error {
+	if parentID == nil {
+		return nil
+	}
+	parent, err := s.repos.Files.FindByID(ctx, *parentID)
+	if err != nil {
+		return fmt.Errorf("目标文件夹不存在")
+	}
+	if parent.UserID != userID {
+		return ErrPermission
+	}
+	if parent.DeletedAt != nil {
+		return fmt.Errorf("目标文件夹已在回收站中")
+	}
+	if !parent.IsDirectory {
+		return fmt.Errorf("目标必须是文件夹")
+	}
+	return nil
 }
 
 // GetFileURL returns the direct link URL and markdown reference for a file.
