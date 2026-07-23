@@ -84,6 +84,12 @@ func (s *ShareService) CreateShare(ctx context.Context, userID uuid.UUID, req *C
 	if file.UserID != userID {
 		return nil, ErrPermission
 	}
+	if file.DeletedAt != nil {
+		return nil, fmt.Errorf("已删除的文件无法创建分享")
+	}
+	if file.IsDirectory {
+		return nil, fmt.Errorf("不支持分享文件夹")
+	}
 	if file.ModerationStatus == "banned" {
 		return nil, fmt.Errorf("该文件已被封禁，无法创建分享")
 	}

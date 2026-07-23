@@ -82,6 +82,8 @@ func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title 
 	video, _ = s.refreshPlaybackMeta(ctx, video, "", "")
 
 	if err := s.repos.Videos.Create(ctx, video); err != nil {
+		// Compensate: remove orphaned VCloud object when DB insert fails.
+		_ = s.vcloud.DeleteVideos([]string{vid})
 		return nil, err
 	}
 

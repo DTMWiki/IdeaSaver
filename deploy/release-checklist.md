@@ -2,7 +2,9 @@
 
 ## 0. 前置准备
 
-- 确认代码已拉到目标版本（包含 `go.mod/go.sum`、`server/migrations/002_file_moderation.sql`）。
+- 确认代码已拉到目标版本（包含 `go.mod/go.sum`、`server/internal/repository/migrations/`）。
+- 执行 `ideactl db migrate`（或服务二进制 `migrate`），再用 `ideactl db status` / `migrate-status` 确认无 pending。
+- 若历史上配额不准，可执行 `ideactl db recalc-storage` 重算 files+videos。
 - 确认服务器有 Go 1.23+、Node.js 20+（如果服务器本地构建前端）。
 - 记录当前线上版本号（Git commit / 发布包名）。
 

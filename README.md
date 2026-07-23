@@ -80,7 +80,7 @@ IdeaSaver/
 │   │   ├── repository/  # 数据库操作
 │   │   ├── service/     # 业务逻辑
 │   │   └── storage/     # 多吉云封装
-│   └── migrations/      # 数据库迁移
+│   └── internal/repository/migrations/  # 数据库迁移（embed，版本表 schema_migrations）
 ├── web/                 # React 前端
 │   └── src/
 │       ├── api/         # API 请求

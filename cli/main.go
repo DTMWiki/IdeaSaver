@@ -196,12 +196,14 @@ func handleDB() {
 		}
 
 	case "status":
-		fmt.Println("Checking migration status...")
-		// Simple check: try to connect and verify tables exist
-		cmd := exec.Command(binaryFile, "migrate")
+		fmt.Println("Checking migration status (read-only)...")
+		cmd := exec.Command(binaryFile, "migrate-status")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		_ = cmd.Run()
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Migration status failed: %v\n", err)
+			os.Exit(1)
+		}
 
 	default:
 		fmt.Println("Usage: ideactl db <migrate|recalc-storage|status>")
