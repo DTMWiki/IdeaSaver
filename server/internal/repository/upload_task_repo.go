@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
 	"github.com/google/uuid"
@@ -141,5 +142,58 @@ func (r *UploadTaskRepository) ListByUser(ctx context.Context, userID uuid.UUID)
 
 func (r *UploadTaskRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM upload_tasks WHERE id = $1`, id)
+	return err
+}
+
+// TryAcquireChunkLease reserves one global upload slot (multi-instance safe).
+// Returns leaseID for ReleaseChunkLease. Expired leases are reclaimed first.
+func (r *UploadTaskRepository) TryAcquireChunkLease(ctx context.Context, maxSlots int, holder string, taskID *uuid.UUID, ttl time.Duration) (int64, error) {
+	if maxSlots < 1 {
+		maxSlots = 1
+	}
+	if ttl <= 0 {
+		ttl = 2 * time.Minute
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_chunk_leases WHERE expires_at < NOW()`); err != nil {
+		// Table may not exist yet on old deploys before migrate — surface error.
+		return 0, err
+	}
+
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_chunk_leases`).Scan(&active); err != nil {
+		return 0, err
+	}
+	if active >= maxSlots {
+		return 0, nil
+	}
+
+	var leaseID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO upload_chunk_leases (task_id, holder, expires_at)
+		 VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+		 RETURNING id`,
+		taskID, holder, int(ttl.Seconds()),
+	).Scan(&leaseID)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return leaseID, nil
+}
+
+// ReleaseChunkLease frees a previously acquired upload slot.
+func (r *UploadTaskRepository) ReleaseChunkLease(ctx context.Context, leaseID int64) error {
+	if leaseID <= 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `DELETE FROM upload_chunk_leases WHERE id = $1`, leaseID)
 	return err
 }

@@ -582,11 +582,23 @@ func (c *OSSClient) buildObjectURL(key string) (string, error) {
 }
 
 // DeleteObject removes an object from OSS.
+// Missing keys are treated as success so permanent-delete retries stay idempotent.
 func (c *OSSClient) DeleteObject(ctx context.Context, key string) error {
+	if c == nil || c.client == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 	})
+	if err == nil {
+		return nil
+	}
+	// S3 DeleteObject is typically idempotent; still swallow not-found shaped errors.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "nosuchkey") || strings.Contains(msg, "404") {
+		return nil
+	}
 	return err
 }
 

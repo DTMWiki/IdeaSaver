@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/model"
@@ -128,10 +129,27 @@ func (s *UploadService) InitUpload(ctx context.Context, userID uuid.UUID, req *I
 
 // UploadChunk handles a single chunk upload.
 func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userID uuid.UUID, chunkIndex int, body io.Reader, size int64) error {
+	// Local process gate (fast path) + DB lease (cluster-wide across instances).
 	if err := s.gate.acquire(ctx); err != nil {
 		return err
 	}
 	defer s.gate.release()
+
+	maxSlots := 10
+	if s.cfg != nil && s.cfg.MaxConcurrentUploads > 0 {
+		maxSlots = s.cfg.MaxConcurrentUploads
+	}
+	leaseID, err := s.repos.UploadTasks.TryAcquireChunkLease(ctx, maxSlots, userID.String(), &taskID, 3*time.Minute)
+	if err != nil {
+		// If leases table is missing (pre-migrate), fall back to process gate only.
+		if !strings.Contains(strings.ToLower(err.Error()), "upload_chunk_leases") {
+			return fmt.Errorf("获取上传配额失败: %w", err)
+		}
+	} else if leaseID == 0 {
+		return fmt.Errorf("当前上传并发已满，请稍后重试")
+	} else {
+		defer func() { _ = s.repos.UploadTasks.ReleaseChunkLease(context.Background(), leaseID) }()
+	}
 
 	task, err := s.repos.UploadTasks.FindByID(ctx, taskID)
 	if err != nil {

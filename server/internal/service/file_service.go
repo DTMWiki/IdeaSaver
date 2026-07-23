@@ -237,7 +237,23 @@ func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, us
 	idMap := make(map[uuid.UUID]uuid.UUID, len(nodes))
 	var rootCopy *model.File
 
+	rollback := func() {
+		// Prefer deleting the new root (CASCADE + OSS walk); otherwise no partial root.
+		if rootCopy != nil {
+			_ = s.permanentDeleteInternal(ctx, rootCopy.ID, userID)
+			return
+		}
+		for _, id := range idMap {
+			_ = s.permanentDeleteInternal(ctx, id, userID)
+			break // only need one root-like; maps may not preserve order
+		}
+	}
+
 	for i := range nodes {
+		if err := ctx.Err(); err != nil {
+			rollback()
+			return nil, fmt.Errorf("复制已取消：%w", err)
+		}
 		n := nodes[i]
 		var parent *uuid.UUID
 		if n.ID == src.ID {
@@ -246,6 +262,7 @@ func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, us
 			if mapped, ok := idMap[*n.ParentID]; ok {
 				parent = &mapped
 			} else {
+				rollback()
 				return nil, fmt.Errorf("复制文件夹失败：父节点映射缺失")
 			}
 		}
@@ -254,6 +271,7 @@ func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, us
 		if n.IsDirectory {
 			name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parent, n.Name, nil)
 			if err != nil {
+				rollback()
 				return nil, err
 			}
 			dir := &model.File{
@@ -264,12 +282,14 @@ func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, us
 				ModerationStatus: "normal",
 			}
 			if err := s.repos.Files.Create(ctx, dir); err != nil {
+				rollback()
 				return nil, err
 			}
 			created = dir
 		} else {
 			created, err = s.copyFileNode(ctx, &n, userID, parent)
 			if err != nil {
+				rollback()
 				return nil, err
 			}
 		}
@@ -280,7 +300,11 @@ func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, us
 	}
 
 	if needBytes > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes)
+		if err := s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes); err != nil {
+			rollback()
+			_ = s.repos.Users.RecalcStorageUsed(ctx, userID)
+			return nil, err
+		}
 	}
 	if rootCopy != nil {
 		s.logAction(ctx, userID, "copy", "file", &rootCopy.ID, map[string]any{
@@ -318,6 +342,13 @@ func (s *FileService) copyFileNode(ctx context.Context, src *model.File, userID 
 	publicURL := fmt.Sprintf("%s/s/%s/%s", s.cfg.PublicBaseURL, userID.String(), filepath.Base(newKey))
 	name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, destParentID, src.Name, nil)
 	if err != nil {
+		// Compensate OSS objects if DB naming failed after copy.
+		if s.oss != nil {
+			_ = s.oss.DeleteObject(ctx, newKey)
+			if newThumb != "" {
+				_ = s.oss.DeleteObject(ctx, newThumb)
+			}
+		}
 		return nil, err
 	}
 
@@ -334,6 +365,12 @@ func (s *FileService) copyFileNode(ctx context.Context, src *model.File, userID 
 		ModerationStatus: "normal",
 	}
 	if err := s.repos.Files.Create(ctx, newFile); err != nil {
+		if s.oss != nil {
+			_ = s.oss.DeleteObject(ctx, newKey)
+			if newThumb != "" {
+				_ = s.oss.DeleteObject(ctx, newThumb)
+			}
+		}
 		return nil, err
 	}
 	return newFile, nil
@@ -431,39 +468,11 @@ func (s *FileService) PermanentDelete(ctx context.Context, fileID uuid.UUID, use
 	if file.UserID != userID {
 		return ErrPermission
 	}
-
-	subtree, err := s.repos.Files.ListSubtree(ctx, fileID, userID)
-	if err != nil {
+	if err := s.permanentDeleteInternal(ctx, fileID, userID); err != nil {
 		return err
-	}
-
-	var activeBytes int64
-	for i := range subtree {
-		f := subtree[i]
-		if f.DeletedAt == nil && !f.IsDirectory && f.Size > 0 {
-			activeBytes += f.Size
-		}
-		if s.oss != nil {
-			if f.StorageKey != "" {
-				_ = s.oss.DeleteObject(ctx, f.StorageKey)
-			}
-			if f.ThumbnailKey != "" {
-				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
-			}
-		}
-	}
-
-	// Delete root (CASCADE removes descendants in DB).
-	if err := s.repos.Files.PermanentDeleteSubtree(ctx, fileID, userID); err != nil {
-		return err
-	}
-	if activeBytes > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -activeBytes)
 	}
 	s.logAction(ctx, userID, "permanent_delete", "file", &fileID, map[string]any{
-		"name":         file.Name,
-		"nodes":        len(subtree),
-		"freed_bytes":  activeBytes,
+		"name": file.Name,
 	})
 	return nil
 }
@@ -494,12 +503,16 @@ func (s *FileService) CleanupTrash(ctx context.Context) (int64, error) {
 }
 
 // permanentDeleteInternal is PermanentDelete without ownership re-check by caller identity.
+// Order: collect keys → best-effort OSS delete (idempotent) → DB delete → quota.
+// Safe to retry if a previous attempt deleted OSS but failed on DB.
 func (s *FileService) permanentDeleteInternal(ctx context.Context, fileID, ownerID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
 		return err
 	}
-	// Already gone
 	if file == nil {
 		return nil
 	}
@@ -510,12 +523,15 @@ func (s *FileService) permanentDeleteInternal(ctx context.Context, fileID, owner
 	var activeBytes int64
 	for i := range subtree {
 		f := subtree[i]
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if f.DeletedAt == nil && !f.IsDirectory && f.Size > 0 {
 			activeBytes += f.Size
 		}
 		if s.oss != nil {
 			if f.StorageKey != "" {
-				_ = s.oss.DeleteObject(ctx, f.StorageKey)
+				_ = s.oss.DeleteObject(ctx, f.StorageKey) // missing key = success
 			}
 			if f.ThumbnailKey != "" {
 				_ = s.oss.DeleteObject(ctx, f.ThumbnailKey)
@@ -526,7 +542,9 @@ func (s *FileService) permanentDeleteInternal(ctx context.Context, fileID, owner
 		return err
 	}
 	if activeBytes > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, ownerID, -activeBytes)
+		if err := s.repos.Users.UpdateStorageUsed(ctx, ownerID, -activeBytes); err != nil {
+			_ = s.repos.Users.RecalcStorageUsed(ctx, ownerID)
+		}
 	}
 	return nil
 }
