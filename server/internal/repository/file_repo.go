@@ -133,29 +133,88 @@ func (r *FileRepository) Restore(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-// ListSubtree returns root + all descendants (any deleted state) breadth-first for cleanup.
+// RestoreSubtree clears deleted_at for root + descendants, optionally renaming the root.
+func (r *FileRepository) RestoreSubtree(ctx context.Context, rootID, userID uuid.UUID, rootName string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rootName = strings.TrimSpace(rootName)
+	if rootName != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE files SET name = $2, updated_at = NOW() WHERE id = $1 AND user_id = $3`,
+			rootID, rootName, userID,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE tree AS (
+			SELECT id FROM files WHERE id = $1 AND user_id = $2
+			UNION ALL
+			SELECT f.id FROM files f
+			INNER JOIN tree t ON f.parent_id = t.id
+			WHERE f.user_id = $2
+		)
+		UPDATE files
+		SET deleted_at = NULL, updated_at = NOW()
+		WHERE id IN (SELECT id FROM tree) AND deleted_at IS NOT NULL
+	`, rootID, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListSubtree returns root + all descendants (any deleted state).
+// depthDesc=true orders deepest first (for permanent delete OSS cleanup).
 func (r *FileRepository) ListSubtree(ctx context.Context, rootID, userID uuid.UUID) ([]model.File, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return r.listSubtree(ctx, rootID, userID, true, false)
+}
+
+// ListActiveSubtree returns non-deleted root + descendants, parents before children (for copy).
+func (r *FileRepository) ListActiveSubtree(ctx context.Context, rootID, userID uuid.UUID) ([]model.File, error) {
+	return r.listSubtree(ctx, rootID, userID, false, true)
+}
+
+func (r *FileRepository) listSubtree(ctx context.Context, rootID, userID uuid.UUID, depthDesc, activeOnly bool) ([]model.File, error) {
+	order := "depth DESC"
+	if !depthDesc {
+		order = "depth ASC"
+	}
+	activeFilter := ""
+	if activeOnly {
+		activeFilter = " AND f.deleted_at IS NULL"
+	}
+	rootFilter := ""
+	if activeOnly {
+		rootFilter = " AND deleted_at IS NULL"
+	}
+	// #nosec G201 -- order/filter are fixed constants, not user input
+	q := fmt.Sprintf(`
 		WITH RECURSIVE tree AS (
 			SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
 			       public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
 			       deleted_at, created_at, updated_at, 0 AS depth
 			FROM files
-			WHERE id = $1 AND user_id = $2
+			WHERE id = $1 AND user_id = $2%s
 			UNION ALL
 			SELECT f.id, f.user_id, f.parent_id, f.name, f.storage_key, f.is_directory, f.mime_type, f.size,
 			       f.public_url, f.thumbnail_key, f.moderation_status, f.moderation_reason, f.moderated_by, f.moderated_at,
 			       f.deleted_at, f.created_at, f.updated_at, t.depth + 1
 			FROM files f
 			INNER JOIN tree t ON f.parent_id = t.id
-			WHERE f.user_id = $2
+			WHERE f.user_id = $2%s
 		)
 		SELECT id, user_id, parent_id, name, storage_key, is_directory, mime_type, size,
 		       public_url, thumbnail_key, moderation_status, moderation_reason, moderated_by, moderated_at,
 		       deleted_at, created_at, updated_at
 		FROM tree
-		ORDER BY depth DESC
-	`, rootID, userID)
+		ORDER BY %s
+	`, rootFilter, activeFilter, order)
+
+	rows, err := r.db.QueryContext(ctx, q, rootID, userID)
 	if err != nil {
 		return nil, err
 	}

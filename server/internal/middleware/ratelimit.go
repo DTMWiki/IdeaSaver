@@ -65,12 +65,10 @@ func (rl *ipRateLimiter) cleanupLoop() {
 }
 
 // RateLimit applies a global per-IP request budget (default: 300/min).
+// Note: MaxConcurrentUploads / UploadRateLimitMBps are enforced in UploadService, not here.
 func RateLimit(cfg *config.Config) gin.HandlerFunc {
+	_ = cfg
 	limit := 300
-	if cfg != nil && cfg.MaxConcurrentUploads > 0 {
-		// keep default; config currently has no explicit RPS field
-		_ = cfg
-	}
 	rl := newIPRateLimiter(limit, time.Minute)
 	return func(c *gin.Context) {
 		if !rl.allow(c.ClientIP()) {

@@ -28,10 +28,15 @@ type UploadService struct {
 	repos *repository.Repositories
 	oss   *storage.OSSClient
 	sse   *SSEService
+	gate  *uploadGate
 }
 
 func NewUploadService(cfg *config.Config, repos *repository.Repositories, oss *storage.OSSClient, sse *SSEService) *UploadService {
-	return &UploadService{cfg: cfg, repos: repos, oss: oss, sse: sse}
+	maxConc := 10
+	if cfg != nil && cfg.MaxConcurrentUploads > 0 {
+		maxConc = cfg.MaxConcurrentUploads
+	}
+	return &UploadService{cfg: cfg, repos: repos, oss: oss, sse: sse, gate: newUploadGate(maxConc)}
 }
 
 // InitUploadRequest contains parameters for initializing an upload.
@@ -123,6 +128,11 @@ func (s *UploadService) InitUpload(ctx context.Context, userID uuid.UUID, req *I
 
 // UploadChunk handles a single chunk upload.
 func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userID uuid.UUID, chunkIndex int, body io.Reader, size int64) error {
+	if err := s.gate.acquire(ctx); err != nil {
+		return err
+	}
+	defer s.gate.release()
+
 	task, err := s.repos.UploadTasks.FindByID(ctx, taskID)
 	if err != nil {
 		return err
@@ -144,7 +154,10 @@ func (s *UploadService) UploadChunk(ctx context.Context, taskID uuid.UUID, userI
 		return fmt.Errorf("分片大小与声明不符（期望 %d 字节）", expected)
 	}
 	// Cap the stream so a malicious client cannot over-read past declared size.
-	limited := io.LimitReader(body, size)
+	var limited io.Reader = io.LimitReader(body, size)
+	if s.cfg != nil && s.cfg.UploadRateLimitMBps > 0 {
+		limited = newRateLimitedReader(limited, s.cfg.UploadRateLimitMBps)
+	}
 
 	if task.UploadID != "" {
 		// Multipart upload: upload part

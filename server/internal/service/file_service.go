@@ -153,7 +153,7 @@ func (s *FileService) Move(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	return nil
 }
 
-// Copy copies a file (creates a new OSS object). Directories are not supported.
+// Copy copies a file or folder (recursive) into destParentID.
 func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UUID, destParentID *uuid.UUID) (*model.File, error) {
 	src, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -165,13 +165,27 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 	if src.DeletedAt != nil {
 		return nil, fmt.Errorf("已删除的文件无法复制")
 	}
-	if src.IsDirectory {
-		return nil, fmt.Errorf("暂不支持复制文件夹，请逐个复制文件")
-	}
 	if err := s.assertOwnedDirectory(ctx, userID, destParentID); err != nil {
 		return nil, err
 	}
+	// Prevent copying a folder into itself/descendant.
+	if src.IsDirectory && destParentID != nil {
+		isAnc, err := s.repos.Files.IsAncestor(ctx, fileID, *destParentID, userID)
+		if err != nil {
+			return nil, err
+		}
+		if isAnc {
+			return nil, fmt.Errorf("不能将文件夹复制到其自身或子目录中")
+		}
+	}
 
+	if src.IsDirectory {
+		return s.copyDirectoryTree(ctx, src, userID, destParentID)
+	}
+	return s.copySingleFile(ctx, src, userID, destParentID)
+}
+
+func (s *FileService) copySingleFile(ctx context.Context, src *model.File, userID uuid.UUID, destParentID *uuid.UUID) (*model.File, error) {
 	user, err := s.repos.Users.FindByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -180,9 +194,110 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		return nil, fmt.Errorf("存储配额不足，剩余 %d 字节", user.StorageQuota-user.StorageUsed)
 	}
 
-	newKey := generateStorageKey(userID.String(), src.Name)
+	newFile, err := s.copyFileNode(ctx, src, userID, destParentID)
+	if err != nil {
+		return nil, err
+	}
+	if src.Size > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, src.Size)
+	}
+	s.logAction(ctx, userID, "copy", "file", &newFile.ID, map[string]any{
+		"source_file_id": src.ID.String(),
+		"source_name":    src.Name,
+		"copied_name":    newFile.Name,
+		"parent_id":      uuidToString(destParentID),
+	})
+	return newFile, nil
+}
 
-	// Copy the object in OSS
+func (s *FileService) copyDirectoryTree(ctx context.Context, src *model.File, userID uuid.UUID, destParentID *uuid.UUID) (*model.File, error) {
+	nodes, err := s.repos.Files.ListActiveSubtree(ctx, src.ID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("源文件夹不存在")
+	}
+
+	var needBytes int64
+	for i := range nodes {
+		if !nodes[i].IsDirectory {
+			needBytes += nodes[i].Size
+		}
+	}
+	user, err := s.repos.Users.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if user.StorageUsed+needBytes > user.StorageQuota {
+		return nil, fmt.Errorf("存储配额不足，剩余 %d 字节", user.StorageQuota-user.StorageUsed)
+	}
+
+	// Map old id -> new id for rewiring parent links.
+	idMap := make(map[uuid.UUID]uuid.UUID, len(nodes))
+	var rootCopy *model.File
+
+	for i := range nodes {
+		n := nodes[i]
+		var parent *uuid.UUID
+		if n.ID == src.ID {
+			parent = destParentID
+		} else if n.ParentID != nil {
+			if mapped, ok := idMap[*n.ParentID]; ok {
+				parent = &mapped
+			} else {
+				return nil, fmt.Errorf("复制文件夹失败：父节点映射缺失")
+			}
+		}
+
+		var created *model.File
+		if n.IsDirectory {
+			name, err := ensureUniqueFileName(ctx, s.repos.Files, userID, parent, n.Name, nil)
+			if err != nil {
+				return nil, err
+			}
+			dir := &model.File{
+				UserID:           userID,
+				ParentID:         parent,
+				Name:             name,
+				IsDirectory:      true,
+				ModerationStatus: "normal",
+			}
+			if err := s.repos.Files.Create(ctx, dir); err != nil {
+				return nil, err
+			}
+			created = dir
+		} else {
+			created, err = s.copyFileNode(ctx, &n, userID, parent)
+			if err != nil {
+				return nil, err
+			}
+		}
+		idMap[n.ID] = created.ID
+		if n.ID == src.ID {
+			rootCopy = created
+		}
+	}
+
+	if needBytes > 0 {
+		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes)
+	}
+	if rootCopy != nil {
+		s.logAction(ctx, userID, "copy", "file", &rootCopy.ID, map[string]any{
+			"source_file_id": src.ID.String(),
+			"source_name":    src.Name,
+			"copied_name":    rootCopy.Name,
+			"is_directory":   true,
+			"nodes":          len(nodes),
+			"bytes":          needBytes,
+			"parent_id":      uuidToString(destParentID),
+		})
+	}
+	return rootCopy, nil
+}
+
+func (s *FileService) copyFileNode(ctx context.Context, src *model.File, userID uuid.UUID, destParentID *uuid.UUID) (*model.File, error) {
+	newKey := generateStorageKey(userID.String(), src.Name)
 	if src.StorageKey != "" {
 		if s.oss == nil {
 			return nil, fmt.Errorf("storage unavailable")
@@ -192,12 +307,11 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		}
 	}
 
-	// Copy thumbnail object if present (avoid sharing keys across files).
 	newThumb := ""
 	if src.ThumbnailKey != "" && s.oss != nil {
 		newThumb = generateStorageKey(userID.String(), "thumb-"+src.Name)
 		if err := s.oss.CopyObject(ctx, src.ThumbnailKey, newThumb); err != nil {
-			newThumb = "" // non-fatal
+			newThumb = ""
 		}
 	}
 
@@ -219,24 +333,14 @@ func (s *FileService) Copy(ctx context.Context, fileID uuid.UUID, userID uuid.UU
 		ThumbnailKey:     newThumb,
 		ModerationStatus: "normal",
 	}
-
 	if err := s.repos.Files.Create(ctx, newFile); err != nil {
 		return nil, err
 	}
-
-	_ = s.repos.Users.UpdateStorageUsed(ctx, userID, src.Size)
-	s.logAction(ctx, userID, "copy", "file", &newFile.ID, map[string]any{
-		"source_file_id": src.ID.String(),
-		"source_name":    src.Name,
-		"copied_name":    newFile.Name,
-		"parent_id":      uuidToString(destParentID),
-	})
-
 	return newFile, nil
 }
 
 // SoftDelete moves a file or folder (recursive) to trash.
-// Quota is released for all non-directory files in the subtree.
+// Soft-delete of the tree is one SQL statement (atomic); quota update follows.
 func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID uuid.UUID) error {
 	file, err := s.repos.Files.FindByID(ctx, fileID)
 	if err != nil {
@@ -249,12 +353,16 @@ func (s *FileService) SoftDelete(ctx context.Context, fileID uuid.UUID, userID u
 		return nil
 	}
 
+	// Atomic subtree soft-delete + size sum in one statement.
 	freed, err := s.repos.Files.SoftDeleteSubtree(ctx, fileID, userID)
 	if err != nil {
 		return err
 	}
 	if freed > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, -freed)
+		if err := s.repos.Users.UpdateStorageUsed(ctx, userID, -freed); err != nil {
+			// Soft-delete already committed; best-effort recalc for this user.
+			_ = s.repos.Users.RecalcStorageUsed(ctx, userID)
+		}
 	}
 	s.logAction(ctx, userID, "delete", "file", &fileID, map[string]any{
 		"name":         file.Name,
@@ -296,31 +404,19 @@ func (s *FileService) Restore(ctx context.Context, fileID uuid.UUID, userID uuid
 	if err != nil {
 		return err
 	}
-	if uniqueName != file.Name {
-		if err := s.repos.Files.Rename(ctx, fileID, uniqueName); err != nil {
-			return err
-		}
-	}
 
-	// Restore the whole subtree (children were soft-deleted with the folder).
-	subtree, err := s.repos.Files.ListDeletedSubtree(ctx, fileID, userID)
-	if err != nil {
+	// Single-statement restore of the whole deleted subtree (+ optional rename of root).
+	if err := s.repos.Files.RestoreSubtree(ctx, fileID, userID, uniqueName); err != nil {
 		return err
-	}
-	// Restore deepest first so parent FKs stay valid; actually restore any order is fine (only clear deleted_at).
-	for i := range subtree {
-		if subtree[i].DeletedAt != nil {
-			if err := s.repos.Files.Restore(ctx, subtree[i].ID); err != nil {
-				return err
-			}
-		}
 	}
 
 	if needBytes > 0 {
-		_ = s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes)
+		if err := s.repos.Users.UpdateStorageUsed(ctx, userID, needBytes); err != nil {
+			_ = s.repos.Users.RecalcStorageUsed(ctx, userID)
+		}
 	}
 	s.logAction(ctx, userID, "restore", "file", &fileID, map[string]any{
-		"name":         uniqueName,
+		"name":           uniqueName,
 		"restored_bytes": needBytes,
 	})
 	return nil
