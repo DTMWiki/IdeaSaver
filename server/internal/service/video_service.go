@@ -54,6 +54,14 @@ func NewVideoService(cfg *config.Config, repos *repository.Repositories, vcloud 
 
 // UploadVideo uploads a video to DogeCloud VCloud.
 func (s *VideoService) UploadVideo(ctx context.Context, userID uuid.UUID, title string, reader io.Reader, filename string, size int64) (*model.Video, error) {
+	if size <= 0 {
+		return nil, fmt.Errorf("文件大小无效")
+	}
+	maxBytes := s.cfg.MaxUploadSizeMB * 1024 * 1024
+	if maxBytes > 0 && size > maxBytes {
+		return nil, fmt.Errorf("文件超过最大允许大小 %d MB", s.cfg.MaxUploadSizeMB)
+	}
+
 	user, err := s.repos.Users.FindByID(ctx, userID)
 	if err != nil {
 		return nil, err

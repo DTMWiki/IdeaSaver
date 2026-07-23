@@ -40,8 +40,7 @@ func handleVideoUpload(svc *service.Services) gin.HandlerFunc {
 func handleListVideos(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+		offset, limit := parseOffsetLimit(c, 20, 200)
 
 		videos, total, err := svc.Video.ListVideos(c.Request.Context(), user.ID, offset, limit)
 		if err != nil {
@@ -213,8 +212,8 @@ func authorizeVideoCallback(cfg *config.Config, c *gin.Context) bool {
 		// Fail closed in production; allow local/dev without extra setup.
 		return cfg.Environment != "production"
 	}
+	// Header only — never accept ?secret= (lands in access logs / referrers).
 	provided := strings.TrimSpace(firstNonEmpty(
-		c.Query("secret"),
 		c.GetHeader("X-Callback-Secret"),
 		c.GetHeader("X-Video-Callback-Secret"),
 	))

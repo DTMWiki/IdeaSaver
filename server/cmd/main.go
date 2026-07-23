@@ -87,6 +87,7 @@ func main() {
 	}
 
 	// Global middleware
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORS(cfg))
 	r.Use(middleware.RateLimit(cfg))
 	r.Use(middleware.RequestMeta())

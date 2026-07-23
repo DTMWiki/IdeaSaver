@@ -15,6 +15,8 @@ type User struct {
 	Role         string    `json:"role" db:"role"` // "user" | "admin"
 	// OIDCSub is the stable IdP subject; preferred for login binding over mutable username.
 	OIDCSub      string    `json:"-" db:"oidc_sub"`
+	// TokenVersion increments on logout to invalidate previously issued JWTs.
+	TokenVersion int       `json:"-" db:"token_version"`
 	StorageQuota int64     `json:"storage_quota" db:"storage_quota"`
 	StorageUsed  int64     `json:"storage_used" db:"storage_used"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`

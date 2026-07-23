@@ -19,9 +19,10 @@ const UserContextKey contextKey = "user"
 
 // Claims represents JWT token claims.
 type Claims struct {
-	UserID   uuid.UUID `json:"user_id"`
-	Username string    `json:"username"`
-	Role     string    `json:"role"`
+	UserID       uuid.UUID `json:"user_id"`
+	Username     string    `json:"username"`
+	Role         string    `json:"role"`
+	TokenVersion int       `json:"tv"`
 	jwt.RegisteredClaims
 }
 
@@ -59,8 +60,11 @@ func Auth(cfg *config.Config, userRepo *repository.UserRepository) gin.HandlerFu
 
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (any, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, jwt.ErrTokenSignatureInvalid
+			}
 			return []byte(cfg.JWTSecret), nil
-		})
+		}, jwt.WithValidMethods([]string{"HS256"}))
 
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证已过期或无效"})
@@ -72,6 +76,12 @@ func Auth(cfg *config.Config, userRepo *repository.UserRepository) gin.HandlerFu
 		user, err := userRepo.FindByID(c.Request.Context(), claims.UserID)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+			c.Abort()
+			return
+		}
+		// Logout bumps token_version — reject older JWTs.
+		if claims.TokenVersion != user.TokenVersion {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证已失效，请重新登录"})
 			c.Abort()
 			return
 		}
