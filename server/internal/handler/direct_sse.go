@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -38,7 +39,15 @@ func handleDirectLink(svc *service.Services) gin.HandlerFunc {
 		}
 		defer reader.Close()
 
-		c.Header("Content-Type", contentType)
+		// Never render HTML/SVG/JS inline on the app origin (stored XSS).
+		serveType := safeServeContentType(contentType, file.Name)
+		c.Header("Content-Type", serveType)
+		c.Header("X-Content-Type-Options", "nosniff")
+		if forceAttachment(contentType, file.Name) || serveType == "application/octet-stream" {
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.Name))
+		} else {
+			c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", file.Name))
+		}
 		if contentLength > 0 {
 			c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
 		}
@@ -67,7 +76,10 @@ func handleSSE(svc *service.Services) gin.HandlerFunc {
 			Events: make(chan service.SSEEvent, 10),
 		}
 
-		svc.SSE.Register(client)
+		if !svc.SSE.Register(client) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "SSE 连接数已达上限，请关闭其他标签页后重试"})
+			return
+		}
 		defer svc.SSE.Unregister(client.ID)
 
 		c.Header("Content-Type", "text/event-stream")

@@ -3,12 +3,14 @@ package handler
 import (
 	"crypto/subtle"
 	"net/http"
-	"strconv"
+	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/config"
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
 	"github.com/DTMWiki/IdeaSaver/server/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func handleLogin(cfg *config.Config, svc *service.Services) gin.HandlerFunc {
@@ -69,11 +71,45 @@ func handleEstablishSession(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func handleLogout(cfg *config.Config) gin.HandlerFunc {
+func handleLogout(cfg *config.Config, svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Logout is public (cookie may still be present). Parse token, bump version, clear cookie.
+		if svc != nil && svc.Auth != nil {
+			if uid, ok := userIDFromRequestToken(cfg, c); ok {
+				_ = svc.Auth.InvalidateSessions(c.Request.Context(), uid)
+			}
+		}
 		clearAuthTokenCookie(c, cfg)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
+}
+
+func userIDFromRequestToken(cfg *config.Config, c *gin.Context) (uuid.UUID, bool) {
+	tokenStr := extractBearerToken(c)
+	if tokenStr == "" {
+		if cookie, err := c.Cookie(authTokenCookie); err == nil {
+			tokenStr = strings.TrimSpace(cookie)
+		}
+	}
+	if tokenStr == "" || cfg == nil {
+		return uuid.Nil, false
+	}
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, jwt.ErrTokenSignatureInvalid
+		}
+		return []byte(cfg.JWTSecret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !token.Valid {
+		return uuid.Nil, false
+	}
+	raw, _ := claims["user_id"].(string)
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 func setAuthTokenCookie(c *gin.Context, cfg *config.Config, token string) {
@@ -123,8 +159,7 @@ func handleGetQuota() gin.HandlerFunc {
 func handleGetHistory(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := middleware.GetUser(c)
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 
 		logs, total, err := svc.Admin.GetUserHistory(c.Request.Context(), user.ID, offset, limit)
 		if err != nil {

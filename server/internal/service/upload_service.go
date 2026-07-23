@@ -95,10 +95,13 @@ func (s *UploadService) InitUpload(ctx context.Context, userID uuid.UUID, req *I
 		totalChunks = 1
 	}
 
+	// Never trust client-supplied MIME; derive from filename extension only.
+	safeMIME := contentTypeForUploadTask(req.Filename)
+
 	// For small files, use single upload (no multipart)
 	var uploadID string
 	if req.Size > int64(chunkSize) {
-		uploadID, err = s.oss.CreateMultipartUpload(ctx, storageKey, req.MimeType)
+		uploadID, err = s.oss.CreateMultipartUpload(ctx, storageKey, safeMIME)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init multipart upload: %w", err)
 		}
@@ -467,15 +470,24 @@ func (s *UploadService) ListTasks(ctx context.Context, userID uuid.UUID) ([]mode
 }
 
 func getMimeType(ext string) string {
+	// Intentionally never map HTML/SVG/JS/CSS to browser-executable types for storage.
+	// Those extensions are stored as octet-stream so same-origin /s/ links cannot XSS.
 	mimeTypes := map[string]string{
 		".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-		".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+		".gif": "image/gif", ".webp": "image/webp",
 		".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
 		".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
 		".pdf": "application/pdf", ".zip": "application/zip",
-		".txt": "text/plain", ".html": "text/html", ".css": "text/css",
-		".js": "text/javascript", ".json": "application/json",
+		".txt": "text/plain", ".json": "application/json",
 		".md": "text/markdown",
+		// Dangerous / scriptable — never serve as native browser types from app origin.
+		".svg":  "application/octet-stream",
+		".html": "application/octet-stream",
+		".htm":  "application/octet-stream",
+		".js":   "application/octet-stream",
+		".mjs":  "application/octet-stream",
+		".css":  "application/octet-stream",
+		".xml":  "application/octet-stream",
 	}
 	if mt, ok := mimeTypes[ext]; ok {
 		return mt

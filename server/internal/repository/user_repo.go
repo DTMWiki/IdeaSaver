@@ -22,9 +22,9 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*model.User, error) {
 	var u model.User
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), storage_quota, storage_used, created_at, updated_at
+		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), COALESCE(token_version, 0), storage_quota, storage_used, created_at, updated_at
 		 FROM users WHERE username = $1`, username).Scan(
-		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub,
+		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub, &u.TokenVersion,
 		&u.StorageQuota, &u.StorageUsed, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
@@ -40,9 +40,9 @@ func (r *UserRepository) FindByOIDCSub(ctx context.Context, sub string) (*model.
 	}
 	var u model.User
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), storage_quota, storage_used, created_at, updated_at
+		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), COALESCE(token_version, 0), storage_quota, storage_used, created_at, updated_at
 		 FROM users WHERE oidc_sub = $1`, sub).Scan(
-		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub,
+		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub, &u.TokenVersion,
 		&u.StorageQuota, &u.StorageUsed, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
@@ -54,15 +54,24 @@ func (r *UserRepository) FindByOIDCSub(ctx context.Context, sub string) (*model.
 func (r *UserRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var u model.User
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), storage_quota, storage_used, created_at, updated_at
+		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), COALESCE(token_version, 0), storage_quota, storage_used, created_at, updated_at
 		 FROM users WHERE id = $1`, id).Scan(
-		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub,
+		&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub, &u.TokenVersion,
 		&u.StorageQuota, &u.StorageUsed, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
+}
+
+// BumpTokenVersion invalidates all JWTs issued before this call for the user.
+func (r *UserRepository) BumpTokenVersion(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE id = $1`,
+		userID,
+	)
+	return err
 }
 
 // UpsertByOIDC links an IdP subject to a local user.
@@ -232,7 +241,7 @@ func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]model.U
 	}
 
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), storage_quota, storage_used, created_at, updated_at
+		`SELECT id, username, display_name, email, role, COALESCE(oidc_sub, ''), COALESCE(token_version, 0), storage_quota, storage_used, created_at, updated_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -242,7 +251,7 @@ func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]model.U
 	var users []model.User
 	for rows.Next() {
 		var u model.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub,
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.OIDCSub, &u.TokenVersion,
 			&u.StorageQuota, &u.StorageUsed, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, 0, err
 		}

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/DTMWiki/IdeaSaver/server/internal/middleware"
@@ -14,8 +13,7 @@ import (
 
 func handleAdminListFiles(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 		keyword := strings.TrimSpace(c.Query("keyword"))
 
 		files, total, err := svc.Admin.ListAllFiles(c.Request.Context(), keyword, offset, limit)
@@ -92,8 +90,7 @@ func handleAdminUnbanFile(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminListVideos(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 		keyword := strings.TrimSpace(c.Query("keyword"))
 
 		videos, total, err := svc.Admin.ListAllVideos(c.Request.Context(), keyword, offset, limit)
@@ -167,8 +164,7 @@ func handleAdminSetVideoStatus(svc *service.Services) gin.HandlerFunc {
 func handleAdminListAppeals(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		status := c.Query("status")
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 
 		appeals, total, err := svc.Admin.ListAppeals(c.Request.Context(), status, offset, limit)
 		if err != nil {
@@ -207,8 +203,7 @@ func handleAdminReviewAppeal(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminListLogs(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 		startAt, err := parseAuditLogTime(c.Query("start_at"), false)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的开始时间"})
@@ -239,8 +234,7 @@ func handleAdminListLogs(svc *service.Services) gin.HandlerFunc {
 
 func handleAdminListUsers(svc *service.Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, limit := parseOffsetLimit(c, 50, 200)
 
 		users, total, err := svc.Admin.ListUsers(c.Request.Context(), offset, limit)
 		if err != nil {

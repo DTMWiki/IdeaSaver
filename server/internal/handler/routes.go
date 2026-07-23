@@ -22,11 +22,16 @@ func SetupRoutes(r *gin.Engine, cfg *config.Config, svc *service.Services) {
 	{
 		authPublic.GET("/login", handleLogin(cfg, svc))
 		authPublic.GET("/callback", handleCallback(cfg, svc))
-		authPublic.POST("/logout", handleLogout(cfg))
+		authPublic.POST("/logout", handleLogout(cfg, svc))
 	}
 
-	r.GET("/api/shares/:code", handleAccessShare(svc))
-	r.GET("/api/shares/:code/download", handleDownloadShare(svc))
+	// Stricter per-IP+code limits on share unlock / download (password brute-force).
+	sharePublic := r.Group("/api/shares")
+	sharePublic.Use(middleware.SharePasswordLimit(10, 0))
+	{
+		sharePublic.GET("/:code", handleAccessShare(svc))
+		sharePublic.GET("/:code/download", handleDownloadShare(svc))
+	}
 	r.GET("/api/system/forbidden-image", handleForbiddenImage())
 
 	// DogeCloud callback endpoint: support both GET and POST payload styles.
