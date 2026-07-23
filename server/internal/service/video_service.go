@@ -277,16 +277,19 @@ func (s *VideoService) DeleteVideo(ctx context.Context, id uuid.UUID, userID uui
 // BatchDeleteVideos deletes multiple videos.
 func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, userID uuid.UUID) error {
 	var vids []string
+	var validatedIDs []uuid.UUID
 	var deleted []map[string]any
 	var totalSize int64
 	for _, id := range ids {
 		video, err := s.repos.Videos.FindByID(ctx, id)
 		if err != nil {
+			// Skip missing IDs; only validated rows are deleted below.
 			continue
 		}
 		if video.UserID != userID {
 			return fmt.Errorf("%w: video %s", ErrPermission, id)
 		}
+		validatedIDs = append(validatedIDs, video.ID)
 		vids = append(vids, video.VID)
 		totalSize += video.Size
 		deleted = append(deleted, map[string]any{
@@ -297,11 +300,16 @@ func (s *VideoService) BatchDeleteVideos(ctx context.Context, ids []uuid.UUID, u
 		})
 	}
 
+	if len(validatedIDs) == 0 {
+		return nil
+	}
+
 	if len(vids) > 0 {
 		_ = s.vcloud.DeleteVideos(vids)
 	}
 
-	if err := s.repos.Videos.BatchDelete(ctx, ids); err != nil {
+	// Only delete IDs that passed FindByID + ownership checks (not the raw input slice).
+	if err := s.repos.Videos.BatchDelete(ctx, validatedIDs); err != nil {
 		return err
 	}
 
