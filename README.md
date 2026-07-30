@@ -202,7 +202,7 @@ ideactl db status          # 查看迁移状态
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE) 开源。
+本项目采用 [GNU Affero General Public License v3.0](LICENSE) 开源（`AGPL-3.0-only`）。
 
 ---
 
